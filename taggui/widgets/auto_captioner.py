@@ -264,24 +264,29 @@ class CaptionSettingsForm(QVBoxLayout):
     @Slot(str)
     def show_settings_for_model(self, model_id: str):
         wd_tagger_widgets = [self.wd_tagger_settings_form_container]
+        # Device settings should be visible for all models, including WD tagger
+        always_visible_widgets = [
+            self.device_label,
+            self.device_combo_box,
+            self.horizontal_line,
+            self.toggle_advanced_settings_form_button,
+            self.advanced_settings_form_container
+        ]
         non_wd_tagger_widgets = [
             self.prompt_label,
             self.prompt_text_edit,
             self.caption_start_label,
             self.caption_start_line_edit,
-            self.device_label,
-            self.device_combo_box,
             self.load_in_4_bit_container,
-            self.remove_tag_separators_container,
-            self.horizontal_line,
-            self.toggle_advanced_settings_form_button,
-            self.advanced_settings_form_container
+            self.remove_tag_separators_container
         ]
         is_wd_tagger_model = get_model_class(model_id) == WdTagger
         for widget in wd_tagger_widgets:
             widget.setVisible(is_wd_tagger_model)
         for widget in non_wd_tagger_widgets:
             widget.setVisible(not is_wd_tagger_model)
+        for widget in always_visible_widgets:
+            widget.setVisible(True)
         self.set_load_in_4_bit_visibility(self.device_combo_box.currentText())
 
     @Slot(str)
