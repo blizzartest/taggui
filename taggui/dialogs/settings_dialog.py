@@ -31,6 +31,8 @@ class SettingsDialog(QDialog):
                               5, 0, Qt.AlignmentFlag.AlignRight)
         grid_layout.addWidget(QLabel('Auto-captioning models directory'), 6, 0,
                               Qt.AlignmentFlag.AlignRight)
+        grid_layout.addWidget(QLabel('Tags subfolder'), 7, 0,
+                              Qt.AlignmentFlag.AlignRight)
 
         font_size_spin_box = SettingsSpinBox(
             key='font_size', default=DEFAULT_SETTINGS['font_size'],
@@ -80,6 +82,11 @@ class SettingsDialog(QDialog):
             default=DEFAULT_SETTINGS['image_list_file_formats'])
         file_types_line_edit.setMinimumWidth(400)
         file_types_line_edit.textChanged.connect(self.show_restart_warning)
+        tags_subfolder_line_edit = SettingsLineEdit(
+            key='tags_subfolder',
+            default=DEFAULT_SETTINGS['tags_subfolder'])
+        tags_subfolder_line_edit.setMinimumWidth(200)
+        tags_subfolder_line_edit.textChanged.connect(self.show_restart_warning)
 
         grid_layout.addWidget(font_size_spin_box, 0, 1,
                               Qt.AlignmentFlag.AlignLeft)
@@ -95,7 +102,9 @@ class SettingsDialog(QDialog):
                               Qt.AlignmentFlag.AlignLeft)
         grid_layout.addWidget(self.models_directory_line_edit, 6, 1,
                               Qt.AlignmentFlag.AlignLeft)
-        grid_layout.addWidget(models_directory_button, 7, 1,
+        grid_layout.addWidget(tags_subfolder_line_edit, 7, 1,
+                              Qt.AlignmentFlag.AlignLeft)
+        grid_layout.addWidget(models_directory_button, 8, 1,
                               Qt.AlignmentFlag.AlignLeft)
         layout.addLayout(grid_layout)
 

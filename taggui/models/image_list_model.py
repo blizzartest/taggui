@@ -35,22 +35,32 @@ def get_image_paths(directory_path: Path, image_suffixes: set[str]) -> set[Path]
     return image_paths
 
 
-def get_text_file_paths(directory_path: Path) -> set[Path]:
+def get_text_file_paths(directory_path: Path, tags_subfolder: str = '') -> set[Path]:
     """
     Recursively get all .txt file paths in a directory, including those in
-    subdirectories.
+    subdirectories. Also checks the tags subfolder if specified.
     """
     text_paths = set()
     for path in directory_path.iterdir():
         if path.is_file() and path.suffix == '.txt':
             text_paths.add(path)
         elif path.is_dir():
-            text_paths.update(get_text_file_paths(path))
+            text_paths.update(get_text_file_paths(path, tags_subfolder))
+    # Also check the tags subfolder for .txt files
+    if tags_subfolder:
+        tags_dir = directory_path / tags_subfolder
+        if tags_dir.exists():
+            for path in tags_dir.iterdir():
+                if path.is_file() and path.suffix == '.txt':
+                    text_paths.add(path)
+                elif path.is_dir():
+                    text_paths.update(get_text_file_paths(path, tags_subfolder))
     return text_paths
 
 
 def load_image_metadata(image_path: Path, tag_separator: str,
-                         text_file_paths: set[str]) -> tuple[Path, tuple[int, int] | None, list[str]]:
+                         text_file_paths: set[str],
+                         tags_subfolder: str = '') -> tuple[Path, tuple[int, int] | None, list[str]]:
     """
     Load metadata for a single image in a thread-safe manner.
     Reads dimensions and EXIF orientation in a single pass.
@@ -83,17 +93,25 @@ def load_image_metadata(image_path: Path, tag_separator: str,
     
     # Load tags from .txt file
     tags = []
-    text_file_path = image_path.with_suffix('.txt')
-    if str(text_file_path) in text_file_paths:
-        try:
-            caption = text_file_path.read_text(encoding='utf-8', errors='replace')
-            if caption:
-                tags = caption.split(tag_separator)
-                tags = [tag.strip() for tag in tags]
-                tags = [tag for tag in tags if tag]
-        except OSError as exception:
-            print(f'Failed to read tags for {image_path}: '
-                  f'{exception}', file=sys.stderr)
+    # Check both the main directory and the tags subfolder
+    possible_text_paths = []
+    if tags_subfolder:
+        tags_dir = image_path.parent / tags_subfolder
+        possible_text_paths.append(tags_dir / image_path.with_suffix('.txt').name)
+    possible_text_paths.append(image_path.with_suffix('.txt'))
+    
+    for text_file_path in possible_text_paths:
+        if str(text_file_path) in text_file_paths:
+            try:
+                caption = text_file_path.read_text(encoding='utf-8', errors='replace')
+                if caption:
+                    tags = caption.split(tag_separator)
+                    tags = [tag.strip() for tag in tags]
+                    tags = [tag for tag in tags if tag]
+                    break  # Found tags, stop looking
+            except OSError as exception:
+                print(f'Failed to read tags for {image_path}: '
+                      f'{exception}', file=sys.stderr)
     
     return (image_path, dimensions, tags)
 
@@ -181,9 +199,13 @@ class ImageListModel(QAbstractListModel):
                 suffix = '.' + suffix
             image_suffixes.add(suffix)
         
+        tags_subfolder = settings.value(
+            'tags_subfolder',
+            defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
+        
         # Get image paths and text file paths in parallel
         image_paths = get_image_paths(directory_path, image_suffixes)
-        text_file_paths = get_text_file_paths(directory_path)
+        text_file_paths = get_text_file_paths(directory_path, tags_subfolder)
         text_file_path_strings = {str(path) for path in text_file_paths}
         
         # Use ThreadPoolExecutor for parallel loading
@@ -194,7 +216,7 @@ class ImageListModel(QAbstractListModel):
             # Submit all image loading tasks
             future_to_path = {
                 executor.submit(load_image_metadata, image_path, self.tag_separator,
-                               text_file_path_strings): image_path
+                               text_file_path_strings, tags_subfolder): image_path
                 for image_path in sorted(image_paths)
             }
             
@@ -220,8 +242,22 @@ class ImageListModel(QAbstractListModel):
         self.update_undo_and_redo_actions_requested.emit()
 
     def write_image_tags_to_disk(self, image: Image):
+        settings = get_settings()
+        tags_subfolder = settings.value(
+            'tags_subfolder',
+            defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
+        
+        # Determine where to write the tags file
+        if tags_subfolder:
+            tags_dir = image.path.parent / tags_subfolder
+            # Create the subfolder if it doesn't exist
+            tags_dir.mkdir(parents=True, exist_ok=True)
+            text_file_path = tags_dir / image.path.with_suffix('.txt').name
+        else:
+            text_file_path = image.path.with_suffix('.txt')
+        
         try:
-            image.path.with_suffix('.txt').write_text(
+            text_file_path.write_text(
                 self.tag_separator.join(image.tags), encoding='utf-8',
                 errors='replace')
         except OSError:
