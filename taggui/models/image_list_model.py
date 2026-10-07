@@ -2,36 +2,100 @@ import random
 import re
 import sys
 from collections import Counter, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
 import exifread
 import imagesize
+
+from utils.image import Image
+from utils.settings import DEFAULT_SETTINGS, get_settings
+from utils.utils import get_confirmation_dialog_reply, pluralize
 from PySide6.QtCore import (QAbstractListModel, QModelIndex, QSize, Qt, Signal,
                             Slot)
 from PySide6.QtGui import QIcon, QImageReader, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
-from utils.image import Image
-from utils.settings import DEFAULT_SETTINGS, get_settings
-from utils.utils import get_confirmation_dialog_reply, pluralize
-
 UNDO_STACK_SIZE = 32
 
 
-def get_file_paths(directory_path: Path) -> set[Path]:
+def get_image_paths(directory_path: Path, image_suffixes: set[str]) -> set[Path]:
     """
-    Recursively get all file paths in a directory, including those in
+    Recursively get all image file paths in a directory, including those in
+    subdirectories. Filters for image files directly during traversal.
+    """
+    image_paths = set()
+    for path in directory_path.iterdir():
+        if path.is_file() and path.suffix.lower() in image_suffixes:
+            image_paths.add(path)
+        elif path.is_dir():
+            image_paths.update(get_image_paths(path, image_suffixes))
+    return image_paths
+
+
+def get_text_file_paths(directory_path: Path) -> set[Path]:
+    """
+    Recursively get all .txt file paths in a directory, including those in
     subdirectories.
     """
-    file_paths = set()
+    text_paths = set()
     for path in directory_path.iterdir():
-        if path.is_file():
-            file_paths.add(path)
+        if path.is_file() and path.suffix == '.txt':
+            text_paths.add(path)
         elif path.is_dir():
-            file_paths.update(get_file_paths(path))
-    return file_paths
+            text_paths.update(get_text_file_paths(path))
+    return text_paths
+
+
+def load_image_metadata(image_path: Path, tag_separator: str,
+                         text_file_paths: set[str]) -> tuple[Path, tuple[int, int] | None, list[str]]:
+    """
+    Load metadata for a single image in a thread-safe manner.
+    Reads dimensions and EXIF orientation in a single pass.
+    
+    Returns: (path, dimensions, tags)
+    """
+    dimensions = None
+    try:
+        # Single-pass: get dimensions first
+        dimensions = imagesize.get(image_path)
+        
+        # Check EXIF orientation and rotate dimensions if necessary
+        # Use the file path directly - exifread handles opening efficiently
+        try:
+            with open(image_path, 'rb') as image_file:
+                exif_tags = exifread.process_file(
+                    image_file, details=False,
+                    stop_tag='Image Orientation')
+                if 'Image Orientation' in exif_tags:
+                    orientations = exif_tags['Image Orientation'].values
+                    if any(value in orientations for value in (5, 6, 7, 8)):
+                        dimensions = (dimensions[1], dimensions[0])
+        except Exception as exception:
+            print(f'Failed to get Exif tags for {image_path}: '
+                  f'{exception}', file=sys.stderr)
+    except (ValueError, OSError) as exception:
+        print(f'Failed to get dimensions for {image_path}: '
+              f'{exception}', file=sys.stderr)
+        dimensions = None
+    
+    # Load tags from .txt file
+    tags = []
+    text_file_path = image_path.with_suffix('.txt')
+    if str(text_file_path) in text_file_paths:
+        try:
+            caption = text_file_path.read_text(encoding='utf-8', errors='replace')
+            if caption:
+                tags = caption.split(tag_separator)
+                tags = [tag.strip() for tag in tags]
+                tags = [tag for tag in tags if tag]
+        except OSError as exception:
+            print(f'Failed to read tags for {image_path}: '
+                  f'{exception}', file=sys.stderr)
+    
+    return (image_path, dimensions, tags)
 
 
 @dataclass
@@ -105,60 +169,45 @@ class ImageListModel(QAbstractListModel):
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.update_undo_and_redo_actions_requested.emit()
-        file_paths = get_file_paths(directory_path)
+        
         settings = get_settings()
         image_suffixes_string = settings.value(
             'image_list_file_formats',
             defaultValue=DEFAULT_SETTINGS['image_list_file_formats'], type=str)
-        image_suffixes = []
+        image_suffixes = set()
         for suffix in image_suffixes_string.split(','):
             suffix = suffix.strip().lower()
             if not suffix.startswith('.'):
                 suffix = '.' + suffix
-            image_suffixes.append(suffix)
-        image_paths = {path for path in file_paths
-                       if path.suffix.lower() in image_suffixes}
-        # Comparing paths is slow on some systems, so convert the paths to
-        # strings.
-        text_file_path_strings = {str(path) for path in file_paths
-                                  if path.suffix == '.txt'}
-        for image_path in image_paths:
-            try:
-                dimensions = imagesize.get(image_path)
-                # Check the Exif orientation tag and rotate the dimensions if
-                # necessary.
-                with open(image_path, 'rb') as image_file:
-                    try:
-                        exif_tags = exifread.process_file(
-                            image_file, details=False,
-                            stop_tag='Image Orientation')
-                        if 'Image Orientation' in exif_tags:
-                            orientations = (exif_tags['Image Orientation']
-                                            .values)
-                            if any(value in orientations
-                                   for value in (5, 6, 7, 8)):
-                                dimensions = (dimensions[1], dimensions[0])
-                    except Exception as exception:
-                        print(f'Failed to get Exif tags for {image_path}: '
-                              f'{exception}', file=sys.stderr)
-            except (ValueError, OSError) as exception:
-                print(f'Failed to get dimensions for {image_path}: '
-                      f'{exception}', file=sys.stderr)
-                dimensions = None
-            tags = []
-            text_file_path = image_path.with_suffix('.txt')
-            if str(text_file_path) in text_file_path_strings:
-                # `errors='replace'` inserts a replacement marker such as '?'
-                # when there is malformed data.
-                caption = text_file_path.read_text(encoding='utf-8',
-                                                   errors='replace')
-                if caption:
-                    tags = caption.split(self.tag_separator)
-                    tags = [tag.strip() for tag in tags]
-                    tags = [tag for tag in tags if tag]
-            image = Image(image_path, dimensions, tags)
-            self.images.append(image)
-        self.images.sort(key=lambda image_: image_.path)
+            image_suffixes.add(suffix)
+        
+        # Get image paths and text file paths in parallel
+        image_paths = get_image_paths(directory_path, image_suffixes)
+        text_file_paths = get_text_file_paths(directory_path)
+        text_file_path_strings = {str(path) for path in text_file_paths}
+        
+        # Use ThreadPoolExecutor for parallel loading
+        num_workers = min(4, len(image_paths)) if image_paths else 1
+        
+        loaded_images = []
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all image loading tasks
+            future_to_path = {
+                executor.submit(load_image_metadata, image_path, self.tag_separator,
+                               text_file_path_strings): image_path
+                for image_path in sorted(image_paths)
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_path):
+                image_path, dimensions, tags = future.result()
+                image = Image(image_path, dimensions, tags)
+                loaded_images.append(image)
+        
+        # Sort by path (already sorted from input, but ensure consistency)
+        loaded_images.sort(key=lambda image_: image_.path)
+        
+        self.images = loaded_images
         self.modelReset.emit()
 
     def add_to_undo_stack(self, action_name: str,
