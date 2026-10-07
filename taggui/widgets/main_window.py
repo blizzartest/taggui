@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QMainWindow,
 from transformers import AutoTokenizer
 
 from dialogs.batch_reorder_tags_dialog import BatchReorderTagsDialog
+from dialogs.export_metadata_dialog import ExportMetadataDialog
 from dialogs.find_and_replace_dialog import FindAndReplaceDialog
 from dialogs.settings_dialog import SettingsDialog
 from models.image_list_model import ImageListModel
@@ -274,6 +275,19 @@ class MainWindow(QMainWindow):
         batch_reorder_tags_dialog.exec()
 
     @Slot()
+    def show_export_metadata_dialog(self):
+        if not self.directory_path:
+            message_box = QMessageBox()
+            message_box.setWindowTitle('Export Tags to Metadata')
+            message_box.setIcon(QMessageBox.Icon.Information)
+            message_box.setText('Please load a directory first.')
+            message_box.exec()
+            return
+        export_dialog = ExportMetadataDialog(
+            parent=self, directory_path=self.directory_path)
+        export_dialog.exec()
+
+    @Slot()
     def remove_duplicate_tags(self):
         removed_tag_count = self.image_list_model.remove_duplicate_tags()
         message_box = QMessageBox()
@@ -342,6 +356,12 @@ class MainWindow(QMainWindow):
         batch_reorder_tags_action.triggered.connect(
             self.show_batch_reorder_tags_dialog)
         edit_menu.addAction(batch_reorder_tags_action)
+        export_metadata_action = QAction('Export Tags to Metadata...',
+                                         parent=self)
+        export_metadata_action.setShortcut(QKeySequence('Ctrl+M'))
+        export_metadata_action.triggered.connect(
+            self.show_export_metadata_dialog)
+        edit_menu.addAction(export_metadata_action)
         remove_duplicate_tags_action = QAction('Remove Duplicate Tags',
                                                parent=self)
         remove_duplicate_tags_action.setShortcut(QKeySequence('Ctrl+D'))
@@ -572,4 +592,14 @@ class MainWindow(QMainWindow):
             directory_path = Path(self.settings.value('directory_path',
                                                       type=str))
             if directory_path.is_dir():
-                self.load_directory(directory_path, select_index=image_index)
+                # Ask user if they want to load the previous directory
+                reply = QMessageBox.question(
+                    self,
+                    'Load Previous Directory',
+                    f'Load the previously opened directory:\n{directory_path}\n\n'
+                    'This may take a while for large directories.',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.load_directory(directory_path, select_index=image_index)
