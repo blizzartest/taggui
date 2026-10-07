@@ -37,7 +37,8 @@ class WdTaggerModel:
         if not tags_path.is_file():
             tags_path = huggingface_hub.hf_hub_download(
                 model_id, filename='selected_tags.csv')
-        self.inference_session = InferenceSession(model_path)
+        self.inference_session = InferenceSession(
+            model_path, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.tags = []
         self.rating_tags_indices = []
         self.general_tags_indices = []
@@ -63,6 +64,9 @@ class WdTaggerModel:
         output_name = self.inference_session.get_outputs()[0].name
         probabilities = self.inference_session.run(
             [output_name], {input_name: image_array})[0][0].astype(np.float32)
+        # Some exports output logits; convert them to probabilities.
+        if probabilities.min() < 0.0 or probabilities.max() > 1.0:
+            probabilities = 1.0 / (1.0 + np.exp(-probabilities))
         # Exclude the rating tags.
         tags = [tag for index, tag in enumerate(self.tags)
                 if index not in self.rating_tags_indices]
@@ -132,8 +136,9 @@ class WdTagger(AutoCaptioningModel):
         vertical_padding = (max_dimension - pil_image.height) // 2
         canvas.paste(pil_image, (horizontal_padding, vertical_padding))
         # Resize the image to the model's input dimensions.
-        _, input_dimension, *_ = (self.model.inference_session.get_inputs()[0]
-                                  .shape)
+        input_shape = self.model.inference_session.get_inputs()[0].shape
+        channels_first = input_shape[1] == 3
+        input_dimension = input_shape[2] if channels_first else input_shape[1]
         if max_dimension != input_dimension:
             input_dimensions = (input_dimension, input_dimension)
             canvas = canvas.resize(input_dimensions,
@@ -141,7 +146,12 @@ class WdTagger(AutoCaptioningModel):
         # Convert the image to a numpy array.
         image_array = np.array(canvas, dtype=np.float32)
         # Reverse the order of the color channels.
-        image_array = image_array[:, :, ::-1]
+        image_array = image_array[:, :, ::-1]  # RGB -> BGR (keep this)
+        if channels_first:
+            # timm-style export: normalization is not built in.
+            image_array = image_array / 127.5 - 1.0  # (x/255 - 0.5) / 0.5
+            image_array = np.transpose(image_array, (2, 0, 1))  # HWC -> CHW
+        image_array = np.ascontiguousarray(image_array)
         # Add a batch dimension.
         image_array = np.expand_dims(image_array, axis=0)
         return image_array
