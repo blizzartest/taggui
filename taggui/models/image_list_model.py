@@ -21,7 +21,6 @@ from PySide6.QtWidgets import QMessageBox
 
 UNDO_STACK_SIZE = 32
 SEARCH_RESULT_BATCH_SIZE = 5
-THUMBNAIL_WORKER_COUNT = 4
 
 
 def get_image_paths(directory_path: Path, image_suffixes: set[str]) -> set[Path]:
@@ -193,14 +192,8 @@ class ImageListModel(QAbstractListModel):
         self.search_thread = None
         self.load_generation = 0
         self.pending_thumbnail_paths = set()
-        self.failed_thumbnail_paths = set()
-        self.thumbnail_tasks = deque()
-        self.thumbnail_condition = threading.Condition()
         self.search_batch_loaded.connect(self.add_search_batch)
         self.thumbnail_loaded.connect(self.set_loaded_thumbnail)
-        for _ in range(THUMBNAIL_WORKER_COUNT):
-            threading.Thread(target=self.thumbnail_worker_loop,
-                            daemon=True).start()
 
     def rowCount(self, parent=None) -> int:
         return len(self.images)
@@ -224,10 +217,8 @@ class ImageListModel(QAbstractListModel):
                 return image.thumbnail
             if not image.is_fully_loaded:
                 # In tags-only mode, generate the thumbnail in the
-                # background so that the list stays responsive. Visible
-                # images are prioritized over the preloading of the rest of
-                # the folder.
-                self.submit_thumbnail_task(image, row, to_front=True)
+                # background so that the list stays responsive.
+                self.load_thumbnail_async(image, row)
                 return None
             image_reader = QImageReader(str(image.path))
             # Rotate the image based on the orientation tag.
@@ -261,57 +252,31 @@ class ImageListModel(QAbstractListModel):
             self.image_list_image_width,
             Qt.TransformationMode.SmoothTransformation)
 
-    def submit_thumbnail_task(self, image: Image, row: int,
-                              to_front: bool = False):
+    def load_thumbnail_async(self, image: Image, row: int):
         """
-        Queue an image for thumbnail generation in the background. Tasks at
-        the front are for images that are currently visible; tasks at the
-        back preload images that are not visible yet.
+        Generate the thumbnail for an image in a background thread and store
+        it on the image once it is ready.
         """
-        if (image.thumbnail or image.path in self.pending_thumbnail_paths
-                or image.path in self.failed_thumbnail_paths):
+        if image.path in self.pending_thumbnail_paths:
             return
         self.pending_thumbnail_paths.add(image.path)
-        generation = self.load_generation
-        with self.thumbnail_condition:
-            if to_front:
-                self.thumbnail_tasks.appendleft((image, row, generation))
-            else:
-                self.thumbnail_tasks.append((image, row, generation))
-            self.thumbnail_condition.notify()
 
-    def thumbnail_worker_loop(self):
-        while True:
-            with self.thumbnail_condition:
-                while not self.thumbnail_tasks:
-                    self.thumbnail_condition.wait()
-                image, row, generation = self.thumbnail_tasks.popleft()
-            if generation != self.load_generation:
-                # The model was reset; let the GUI thread resubmit the image
-                # that is now at this row, if any.
-                self.thumbnail_loaded.emit(image, None, row)
-                continue
+        def worker():
             try:
                 thumbnail = self.load_thumbnail_for_image(image)
             except Exception:
                 thumbnail = None
             self.thumbnail_loaded.emit(image, thumbnail, row)
 
+        threading.Thread(target=worker, daemon=True).start()
+
     @Slot(Image, object, int)
     def set_loaded_thumbnail(self, image: Image, thumbnail, row: int):
         """Store a thumbnail generated in the background."""
         self.pending_thumbnail_paths.discard(image.path)
-        if not (0 <= row < len(self.images)) or self.images[row] is not image:
-            # The model changed while the thumbnail was being generated. If
-            # another image is now at this row, queue its thumbnail.
-            if 0 <= row < len(self.images):
-                self.submit_thumbnail_task(self.images[row], row,
-                                           to_front=True)
-            return
         if thumbnail is None:
-            # Decoding failed; do not try again to avoid an endless retry
-            # loop for broken images.
-            self.failed_thumbnail_paths.add(image.path)
+            return
+        if not (0 <= row < len(self.images)) or self.images[row] is not image:
             return
         image.thumbnail = QIcon(QPixmap.fromImage(thumbnail))
         image.is_fully_loaded = True
@@ -486,9 +451,6 @@ class ImageListModel(QAbstractListModel):
                              first_row + len(batch) - 1)
         self.images.extend(batch)
         self.endInsertRows()
-        # Preload the thumbnails of the new images in the background.
-        for row, image in enumerate(batch, start=first_row):
-            self.submit_thumbnail_task(image, row)
 
     def cancel_background_loading(self):
         """Cancel any in-progress background search loading."""
