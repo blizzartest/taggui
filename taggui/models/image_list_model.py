@@ -137,10 +137,13 @@ class ImageListModel(QAbstractListModel):
         self.image_list_image_width = image_list_image_width
         self.tag_separator = tag_separator
         self.images: list[Image] = []
+        self.tag_index: dict[Path, list[str]] = {}
         self.undo_stack = deque(maxlen=UNDO_STACK_SIZE)
         self.redo_stack = []
         self.proxy_image_list_model = None
         self.image_list_selection_model = None
+        self.load_mode = 'full'
+        self.directory_path = None
 
     def rowCount(self, parent=None) -> int:
         return len(self.images)
@@ -161,6 +164,9 @@ class ImageListModel(QAbstractListModel):
             # it. Otherwise, generate a thumbnail and save it to the image.
             if image.thumbnail:
                 return image.thumbnail
+            if not image.is_fully_loaded:
+                # In tags-only mode, generate thumbnail on demand
+                return self.load_thumbnail_for_image(image)
             image_reader = QImageReader(str(image.path))
             # Rotate the image based on the orientation tag.
             image_reader.setAutoTransform(True)
@@ -182,11 +188,28 @@ class ImageListModel(QAbstractListModel):
             return QSize(self.image_list_image_width,
                          int(self.image_list_image_width * height / width))
 
+    def load_thumbnail_for_image(self, image: Image) -> QIcon | None:
+        """Load and generate thumbnail for a single image."""
+        try:
+            image_reader = QImageReader(str(image.path))
+            image_reader.setAutoTransform(True)
+            pixmap = QPixmap.fromImageReader(image_reader).scaledToWidth(
+                self.image_list_image_width,
+                Qt.TransformationMode.SmoothTransformation)
+            thumbnail = QIcon(pixmap)
+            image.thumbnail = thumbnail
+            image.is_fully_loaded = True
+            return thumbnail
+        except Exception:
+            return None
+
     def load_directory(self, directory_path: Path):
         self.images.clear()
+        self.tag_index.clear()
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.update_undo_and_redo_actions_requested.emit()
+        self.directory_path = directory_path
         
         settings = get_settings()
         image_suffixes_string = settings.value(
@@ -203,34 +226,168 @@ class ImageListModel(QAbstractListModel):
             'tags_subfolder',
             defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
         
-        # Get image paths and text file paths in parallel
-        image_paths = get_image_paths(directory_path, image_suffixes)
+        # Always build tag index
+        self.build_tag_index(directory_path, image_suffixes, tags_subfolder)
+        
+        if self.load_mode == 'full':
+            # Load all images with full data (existing behavior)
+            image_paths = get_image_paths(directory_path, image_suffixes)
+            text_file_paths = get_text_file_paths(directory_path, tags_subfolder)
+            text_file_path_strings = {str(path) for path in text_file_paths}
+            
+            # Use ThreadPoolExecutor for parallel loading
+            num_workers = min(4, len(image_paths)) if image_paths else 1
+            
+            loaded_images = []
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                # Submit all image loading tasks
+                future_to_path = {
+                    executor.submit(load_image_metadata, image_path, self.tag_separator,
+                                   text_file_path_strings, tags_subfolder): image_path
+                    for image_path in sorted(image_paths)
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_path):
+                    image_path, dimensions, tags = future.result()
+                    image = Image(image_path, dimensions, tags, None, True)
+                    loaded_images.append(image)
+            
+            # Sort by path (already sorted from input, but ensure consistency)
+            loaded_images.sort(key=lambda image_: image_.path)
+            
+            self.images = loaded_images
+        
+        self.modelReset.emit()
+
+    def build_tag_index(self, directory_path: Path, image_suffixes: set[str],
+                        tags_subfolder: str):
+        """Build an index of image paths to their tags from .txt files."""
         text_file_paths = get_text_file_paths(directory_path, tags_subfolder)
+        image_paths = get_image_paths(directory_path, image_suffixes)
+        
+        # Build a set of all valid image paths for quick lookup
+        valid_image_paths = {str(p) for p in image_paths}
+        
+        for text_path in text_file_paths:
+            # Map .txt path back to image path
+            image_path = self.txt_to_image_path(text_path, tags_subfolder,
+                                                  image_suffixes)
+            if not image_path or str(image_path) not in valid_image_paths:
+                continue
+            
+            try:
+                caption = text_path.read_text(encoding='utf-8', errors='replace')
+                if caption:
+                    tags = caption.split(self.tag_separator)
+                    tags = [tag.strip() for tag in tags if tag.strip()]
+                    self.tag_index[image_path] = tags
+            except OSError as exception:
+                print(f'Failed to read tags for {text_path}: '
+                      f'{exception}', file=sys.stderr)
+
+    def txt_to_image_path(self, text_path: Path, tags_subfolder: str,
+                           image_suffixes: set[str] | None = None) -> Path | None:
+        """Convert a .txt file path back to its corresponding image path."""
+        # Remove .txt suffix
+        base_name = text_path.stem
+        parent_dir = text_path.parent
+        
+        # If the text file is in a tags subfolder, the image is in the parent
+        if tags_subfolder and parent_dir.name == tags_subfolder:
+            parent_dir = parent_dir.parent
+        
+        # Determine which suffixes to try
+        if image_suffixes is None:
+            # Default common image suffixes
+            image_suffixes = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp'}
+        
+        # Find the corresponding image file
+        for suffix in image_suffixes:
+            image_path = parent_dir / (base_name + suffix)
+            if image_path.exists():
+                return image_path
+        
+        # Also check if the text file is named exactly like the image
+        # (e.g., image.jpg.txt)
+        if text_path.suffix == '.txt':
+            # Try removing .txt and checking if the result is a valid image
+            possible_image_path = parent_dir / text_path.stem
+            if possible_image_path.exists() and possible_image_path.suffix.lower() in image_suffixes:
+                return possible_image_path
+            
+            # Also handle double extensions like "image.jpg.txt"
+            stem_stem = text_path.stem
+            if '.' in stem_stem:
+                # Try splitting at the last dot
+                possible_image_path = parent_dir / stem_stem
+                if possible_image_path.exists() and possible_image_path.suffix.lower() in image_suffixes:
+                    return possible_image_path
+        
+        return None
+
+    def image_matches_filter(self, image_path: Path, tags: list[str],
+                              filter_):
+        """Check if an image matches the given filter expression."""
+        # Create a temporary Image object for filtering
+        temp_image = Image(image_path, None, tags)
+        
+        # Use the proxy model's filtering logic if available
+        if self.proxy_image_list_model:
+            return self.proxy_image_list_model.does_image_match_filter(
+                temp_image, filter_)
+        
+        # Fallback: simple string matching
+        if filter_ is None:
+            return True
+        
+        if isinstance(filter_, str):
+            caption = self.tag_separator.join(tags)
+            return filter_.lower() in caption.lower()
+        
+        return True
+
+    def load_matching_images(self, filter_):
+        """Load full image data only for images matching the filter."""
+        self.images.clear()
+        
+        if filter_ is None:
+            # No filter in tags-only mode with no filter -> show nothing
+            self.modelReset.emit()
+            return
+        
+        # Find matching paths from tag index
+        matching_paths = []
+        for image_path, tags in self.tag_index.items():
+            if self.image_matches_filter(image_path, tags, filter_):
+                matching_paths.append(image_path)
+        
+        # Load full data for matches only
+        loaded_images = self.load_full_data_for_paths(matching_paths)
+        self.images = loaded_images
+        
+        self.modelReset.emit()
+
+    def load_full_data_for_paths(self, image_paths: list[Path]) -> list[Image]:
+        """Load full image data (dimensions + tags) for a list of paths."""
+        settings = get_settings()
+        tags_subfolder = settings.value(
+            'tags_subfolder',
+            defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
+        
+        text_file_paths = get_text_file_paths(self.directory_path, tags_subfolder)
         text_file_path_strings = {str(path) for path in text_file_paths}
         
-        # Use ThreadPoolExecutor for parallel loading
-        num_workers = min(4, len(image_paths)) if image_paths else 1
-        
         loaded_images = []
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            # Submit all image loading tasks
-            future_to_path = {
-                executor.submit(load_image_metadata, image_path, self.tag_separator,
-                               text_file_path_strings, tags_subfolder): image_path
-                for image_path in sorted(image_paths)
-            }
-            
-            # Collect results as they complete
-            for future in as_completed(future_to_path):
-                image_path, dimensions, tags = future.result()
-                image = Image(image_path, dimensions, tags)
-                loaded_images.append(image)
+        for image_path in sorted(image_paths):
+            # Load metadata for this image
+            image_path_result, dimensions, tags = load_image_metadata(
+                image_path, self.tag_separator, text_file_path_strings,
+                tags_subfolder)
+            image = Image(image_path_result, dimensions, tags, None, True)
+            loaded_images.append(image)
         
-        # Sort by path (already sorted from input, but ensure consistency)
-        loaded_images.sort(key=lambda image_: image_.path)
-        
-        self.images = loaded_images
-        self.modelReset.emit()
+        return loaded_images
 
     def add_to_undo_stack(self, action_name: str,
                           should_ask_for_confirmation: bool):

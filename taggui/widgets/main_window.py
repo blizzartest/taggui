@@ -47,6 +47,10 @@ class MainWindow(QMainWindow):
         tag_separator = get_tag_separator()
         self.image_list_model = ImageListModel(image_list_image_width,
                                                tag_separator)
+        # Initialize load mode from settings
+        self.image_list_model.load_mode = self.settings.value(
+            'load_mode',
+            defaultValue=DEFAULT_SETTINGS['load_mode'], type=str)
         tokenizer = AutoTokenizer.from_pretrained(
             get_resource_path(TOKENIZER_DIRECTORY_PATH))
         self.proxy_image_list_model = ProxyImageListModel(
@@ -108,7 +112,13 @@ class MainWindow(QMainWindow):
         self.toggle_all_tags_editor_action = QAction('All Tags', parent=self)
         self.toggle_auto_captioner_action = QAction('Auto-Captioner',
                                                     parent=self)
+        self.load_mode_full_action = QAction('Full', parent=self)
+        self.load_mode_full_action.setCheckable(True)
+        self.load_mode_tags_only_action = QAction('Tags Only', parent=self)
+        self.load_mode_tags_only_action.setCheckable(True)
         self.create_menus()
+        # Initialize load mode from settings
+        self.update_load_mode_actions()
 
         self.image_list_selection_model = (self.image_list.list_view
                                            .selectionModel())
@@ -118,6 +128,8 @@ class MainWindow(QMainWindow):
         self.connect_image_tags_editor_signals()
         self.connect_all_tags_editor_signals()
         self.connect_auto_captioner_signals()
+        self.connect_load_mode_signals()
+        self.update_load_mode_from_settings()
         # Forward any unhandled image changing key presses to the image list.
         key_press_forwarder = KeyPressForwarder(
             parent=self, target=self.image_list.list_view,
@@ -391,7 +403,11 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.toggle_image_tags_editor_action)
         view_menu.addAction(self.toggle_all_tags_editor_action)
         view_menu.addAction(self.toggle_auto_captioner_action)
-
+        
+        load_mode_menu = view_menu.addMenu('Load Mode')
+        load_mode_menu.addAction(self.load_mode_full_action)
+        load_mode_menu.addAction(self.load_mode_tags_only_action)
+        
         help_menu = menu_bar.addMenu('Help')
         open_github_repository_action = QAction('GitHub', parent=self)
         open_github_repository_action.triggered.connect(
@@ -418,24 +434,35 @@ class MainWindow(QMainWindow):
     @Slot()
     def set_image_list_filter(self):
         filter_ = self.image_list.filter_line_edit.parse_filter_text()
-        self.proxy_image_list_model.filter = filter_
-        # Apply the new filter.
-        self.proxy_image_list_model.invalidateFilter()
-        if filter_ is None:
-            all_tags_list_selection_model = (self.all_tags_editor
-                                             .all_tags_list.selectionModel())
-            all_tags_list_selection_model.clearSelection()
-            # Clear the current index.
-            self.all_tags_editor.all_tags_list.setCurrentIndex(QModelIndex())
-            # Select the previously selected image in the unfiltered image
-            # list.
-            select_index = self.settings.value('image_index', type=int) or 0
-            self.image_list.list_view.setCurrentIndex(
-                self.proxy_image_list_model.index(select_index, 0))
+        
+        if self.image_list_model.load_mode == 'tags_only':
+            # In tags-only mode, load matching images
+            self.image_list_model.load_matching_images(filter_)
+            # After loading, we need to re-apply the filter through proxy
+            # For now, just select first if there are results
+            if self.proxy_image_list_model.rowCount() > 0:
+                self.image_list.list_view.setCurrentIndex(
+                    self.proxy_image_list_model.index(0, 0))
         else:
-            # Select the first image.
-            self.image_list.list_view.setCurrentIndex(
-                self.proxy_image_list_model.index(0, 0))
+            # Normal full mode - use proxy filtering
+            self.proxy_image_list_model.filter = filter_
+            # Apply the new filter.
+            self.proxy_image_list_model.invalidateFilter()
+            if filter_ is None:
+                all_tags_list_selection_model = (self.all_tags_editor
+                                                 .all_tags_list.selectionModel())
+                all_tags_list_selection_model.clearSelection()
+                # Clear the current index.
+                self.all_tags_editor.all_tags_list.setCurrentIndex(QModelIndex())
+                # Select the previously selected image in the unfiltered image
+                # list.
+                select_index = self.settings.value('image_index', type=int) or 0
+                self.image_list.list_view.setCurrentIndex(
+                    self.proxy_image_list_model.index(select_index, 0))
+            else:
+                # Select the first image.
+                self.image_list.list_view.setCurrentIndex(
+                    self.proxy_image_list_model.index(0, 0))
 
     @Slot()
     def save_image_index(self, proxy_image_index: QModelIndex):
@@ -574,6 +601,44 @@ class MainWindow(QMainWindow):
         self.auto_captioner.visibilityChanged.connect(
             lambda: self.toggle_auto_captioner_action.setChecked(
                 self.auto_captioner.isVisible()))
+
+    def connect_load_mode_signals(self):
+        self.load_mode_full_action.triggered.connect(
+            self.set_load_mode_full)
+        self.load_mode_tags_only_action.triggered.connect(
+            self.set_load_mode_tags_only)
+
+    def update_load_mode_from_settings(self):
+        """Initialize load mode from settings."""
+        load_mode = self.settings.value(
+            'load_mode',
+            defaultValue=DEFAULT_SETTINGS['load_mode'], type=str)
+        self.image_list_model.load_mode = load_mode
+        self.update_load_mode_actions()
+
+    def update_load_mode_actions(self):
+        """Update the checked state of load mode actions based on current mode."""
+        current_mode = self.image_list_model.load_mode
+        self.load_mode_full_action.setChecked(current_mode == 'full')
+        self.load_mode_tags_only_action.setChecked(current_mode == 'tags_only')
+
+    @Slot()
+    def set_load_mode_full(self):
+        if self.image_list_model.load_mode != 'full':
+            self.image_list_model.load_mode = 'full'
+            self.settings.setValue('load_mode', 'full')
+            self.update_load_mode_actions()
+            if self.directory_path:
+                self.load_directory(self.directory_path)
+
+    @Slot()
+    def set_load_mode_tags_only(self):
+        if self.image_list_model.load_mode != 'tags_only':
+            self.image_list_model.load_mode = 'tags_only'
+            self.settings.setValue('load_mode', 'tags_only')
+            self.update_load_mode_actions()
+            if self.directory_path:
+                self.load_directory(self.directory_path)
 
     def restore(self):
         # Restore the window geometry and state.

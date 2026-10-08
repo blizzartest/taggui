@@ -10,7 +10,8 @@ DEFAULT_SETTINGS = {
     'insert_space_after_tag_separator': True,
     'autocomplete_tags': True,
     'models_directory_path': '',
-    'tags_subfolder': '.tags'
+    'tags_subfolder': '.tags',
+    'load_mode': 'full'
 }
 
 
