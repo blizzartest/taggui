@@ -10,8 +10,8 @@ from PySide6.QtCore import (QFile, QItemSelection, QItemSelectionModel,
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDockWidget,
                                QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-                               QListView, QMenu, QMessageBox, QVBoxLayout,
-                               QWidget)
+                               QListView, QMenu, QMessageBox, QStyledItemDelegate,
+                               QVBoxLayout, QWidget)
 from pyparsing import (CaselessKeyword, CaselessLiteral, Group, OpAssoc,
                        ParseException, QuotedString, Suppress, Word,
                        infix_notation, nums, one_of, printables)
@@ -113,6 +113,25 @@ class ViewMode(str, Enum):
     GRID = 'Grid'
 
 
+class ImageListItemDelegate(QStyledItemDelegate):
+    """In grid mode, show only the file name, truncated to 20 characters."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.grid_mode = False
+
+    def set_grid_mode(self, grid_mode: bool):
+        self.grid_mode = grid_mode
+
+    def displayText(self, value, locale) -> str:
+        if not self.grid_mode:
+            return str(value)
+        text = str(value).split('\n')[0]
+        if len(text) > 20:
+            text = text[:20] + '...'
+        return text
+
+
 class ImageListView(QListView):
     tags_paste_requested = Signal(list, list)
     directory_reload_requested = Signal()
@@ -127,7 +146,8 @@ class ImageListView(QListView):
         # If the actual height of the image is greater than 3 times the width,
         # the image will be scaled down to fit.
         self.setIconSize(QSize(image_width, image_width * 3))
-        self.setUniformItemSizes(True)
+        self.item_delegate = ImageListItemDelegate(self)
+        self.setItemDelegate(self.item_delegate)
         self.image_width = image_width
         self.set_view_mode(ViewMode.LIST)
 
@@ -189,13 +209,19 @@ class ImageListView(QListView):
 
     def set_view_mode(self, view_mode: str):
         if view_mode == ViewMode.GRID:
+            self.item_delegate.set_grid_mode(True)
+            self.setUniformItemSizes(True)
+            self.setWordWrap(False)
             self.setViewMode(QListView.ViewMode.IconMode)
             self.setMovement(QListView.Movement.Static)
             self.setResizeMode(QListView.ResizeMode.Adjust)
-            self.setSpacing(8)
-            self.setGridSize(QSize(self.image_width + 16,
-                                   self.image_width * 3 + 16))
+            self.setSpacing(2)
+            self.setGridSize(QSize(self.image_width + 8,
+                                   self.image_width * 3 + 32))
         else:
+            self.item_delegate.set_grid_mode(False)
+            self.setUniformItemSizes(False)
+            self.setWordWrap(True)
             self.setViewMode(QListView.ViewMode.ListMode)
             self.setMovement(QListView.Movement.Static)
             self.setResizeMode(QListView.ResizeMode.Fixed)
