@@ -14,7 +14,8 @@ import imagesize
 
 from utils.image import Image
 from utils.settings import DEFAULT_SETTINGS, get_settings
-from utils.tag_store import (get_tags_storage_mode, load_tags_from_database,
+from utils.tag_store import (delete_tag_databases, get_tags_storage_mode,
+                             load_tags_from_database,
                              migrate_txt_tags_to_database as migrate_db,
                              write_tags_to_database)
 from utils.utils import get_confirmation_dialog_reply, pluralize
@@ -661,6 +662,39 @@ class ImageListModel(QAbstractListModel):
             + (f' and deleted {deleted_txt_count} '
                f'{pluralize("caption file", deleted_txt_count)}.'
                if delete_txt_files else '.'))
+
+    @Slot()
+    def delete_all_tags_in_directory(self):
+        """Clear the tags of the loaded directory by deleting its tag
+        databases (and those of its subdirectories)."""
+        if self.directory_path is None:
+            QMessageBox.information(None, 'Delete All Tags',
+                                    'Load a directory first.')
+            return
+        reply = get_confirmation_dialog_reply(
+            title='Delete All Tags',
+            question='Delete the tags of the loaded directory and its '
+                     'subdirectories? This clears the tag lists of all '
+                     'loaded images and cannot be undone.')
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        deleted_database_count = delete_tag_databases(self.directory_path)
+        for image in self.images:
+            image.tags = []
+        self.tag_index.clear()
+        self.database_dirty = False
+        self.database_save_timer.stop()
+        if self.images:
+            first_row = 0
+            last_row = len(self.images) - 1
+            self.dataChanged.emit(self.index(first_row),
+                                  self.index(last_row))
+        QMessageBox.information(
+            None, 'Delete All Tags',
+            f'Deleted {deleted_database_count} '
+            f'{pluralize("tag database", deleted_database_count)} and '
+            f'cleared the tags of {len(self.images)} '
+            f'{pluralize("image", len(self.images))}.')
 
     @Slot()
     def save_tag_database(self):
