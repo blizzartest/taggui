@@ -1,4 +1,5 @@
 import json
+import json
 import os
 import sys
 from pathlib import Path
@@ -20,18 +21,62 @@ def get_tag_database_path(directory_path: Path) -> Path:
     return directory_path / TAG_DATABASE_FILENAME
 
 
+def load_database_entries(database_path: Path) \
+        -> list[tuple[str, list[str]]]:
+    """Read the (relative image path, tags) entries of one database file.
+    Malformed lines are skipped with a warning."""
+    entries = []
+    try:
+        with open(database_path, encoding='utf-8') as database_file:
+            for line_number, line in enumerate(database_file, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError as exception:
+                    print(f'Failed to parse {database_path} line '
+                          f'{line_number}: {exception}', file=sys.stderr)
+                    continue
+                relative_path = entry.get('file')
+                tags = entry.get('tags')
+                if not isinstance(relative_path, str) or not isinstance(
+                        tags, list):
+                    continue
+                entries.append((relative_path, tags))
+    except OSError as exception:
+        print(f'Failed to read tag database {database_path}: {exception}',
+          file=sys.stderr)
+    return entries
+
+
 def load_tags_from_database(directory_path: Path,
                             tag_separator: str) -> dict[Path, list[str]]:
     """
-    Load the tag database (tags.jsonl) for a directory tree.
+    Load the tag databases (tags.jsonl) of a directory tree: the loaded
+    directory gets one database, and each subdirectory gets its own, so
+    that any subdirectory can also be loaded as its own directory.
 
     The keys of the returned dict are absolute image paths. Entries whose
     image file no longer exists are skipped.
     """
     tag_index = {}
-    database_path = get_tag_database_path(directory_path)
-    if not database_path.is_file():
-        return tag_index
+    database_paths = [get_tag_database_path(directory_path)]
+    for path in directory_path.rglob(TAG_DATABASE_FILENAME):
+        if path not in database_paths:
+            database_paths.append(path)
+    for database_path in database_paths:
+        database_directory = database_path.parent
+        for relative_path, tags in load_database_entries(database_path):
+            image_path = Path(os.path.normpath(
+                database_directory / relative_path))
+            if not image_path.is_file():
+                continue
+            if image_path in tag_index:
+                continue
+            tag_index[image_path] = [
+                str(tag).strip() for tag in tags if str(tag).strip()]
+    return tag_index
     try:
         with open(database_path, encoding='utf-8') as database_file:
             for line_number, line in enumerate(database_file, start=1):
@@ -65,37 +110,36 @@ def write_tags_to_database(directory_path: Path,
                            tag_index: dict[Path, list[str]],
                            prune_missing_images: bool = True):
     """
-    Write the tag index to the tag database (tags.jsonl) atomically.
-
-    Image paths are stored relative to the directory so that the database
-    stays portable when the directory is moved or shared.
+    Write the tag index to per-directory tag databases (tags.jsonl)
+    atomically: every directory that contains tagged images gets its own
+    database with image paths relative to that directory, so that any
+    subdirectory can also be loaded as its own directory.
     """
-    database_path = get_tag_database_path(directory_path)
-    entries = []
+    directories: dict[Path, list] = {}
     for image_path, tags in sorted(tag_index.items()):
         if prune_missing_images and not image_path.is_file():
             continue
+        image_directory = image_path.parent
+        directories.setdefault(image_directory, []).append(
+            {'file': image_path.name, 'tags': list(tags)})
+    for image_directory, entries in directories.items():
+        database_path = get_tag_database_path(image_directory)
+        temporary_path = database_path.with_suffix('.jsonl.tmp')
         try:
-            relative_path = image_path.relative_to(directory_path)
-        except ValueError:
-            relative_path = image_path
-        entries.append({'file': relative_path.as_posix(),
-                        'tags': list(tags)})
-    temporary_path = database_path.with_suffix('.jsonl.tmp')
-    try:
-        with open(temporary_path, 'w', encoding='utf-8') as database_file:
-            for entry in entries:
-                database_file.write(
-                    json.dumps(entry, ensure_ascii=False) + '\n')
-        os.replace(temporary_path, database_path)
-    except OSError as exception:
-        print(f'Failed to write tag database {database_path}: {exception}',
-              file=sys.stderr)
-        try:
-            temporary_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+            with open(temporary_path, 'w', encoding='utf-8') \
+                    as database_file:
+                for entry in entries:
+                    database_file.write(
+                        json.dumps(entry, ensure_ascii=False) + '\n')
+            os.replace(temporary_path, database_path)
+        except OSError as exception:
+            print(f'Failed to write tag database {database_path}: {exception}',
+                  file=sys.stderr)
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
 
 def migrate_txt_tags_to_database(directory_path: Path,
