@@ -66,6 +66,8 @@ def load_tags_from_database(directory_path: Path,
         if path not in database_paths:
             database_paths.append(path)
     for database_path in database_paths:
+        if not database_path.is_file():
+            continue
         database_directory = database_path.parent
         for relative_path, tags in load_database_entries(database_path):
             image_path = Path(os.path.normpath(
@@ -140,6 +142,30 @@ def write_tags_to_database(directory_path: Path,
             except OSError:
                 pass
             raise
+
+
+def delete_tag_databases(directory_path: Path) -> int:
+    """
+    Delete the tag databases (tags.jsonl) of a directory and its
+    subdirectories.
+
+    Returns the number of deleted database files.
+    """
+    database_paths = [get_tag_database_path(directory_path)]
+    for path in directory_path.rglob(TAG_DATABASE_FILENAME):
+        if path not in database_paths:
+            database_paths.append(path)
+    deleted_count = 0
+    for database_path in database_paths:
+        if not database_path.is_file():
+            continue
+        try:
+            database_path.unlink()
+            deleted_count += 1
+        except OSError as exception:
+            print(f'Failed to delete {database_path}: {exception}',
+                  file=sys.stderr)
+    return deleted_count
 
 
 def migrate_txt_tags_to_database(directory_path: Path,

@@ -427,6 +427,10 @@ class MainWindow(QMainWindow):
         migrate_tags_action.triggered.connect(
             self.show_migrate_tags_dialog)
         edit_menu.addAction(migrate_tags_action)
+        delete_all_tags_action = QAction('Delete All Tags...', parent=self)
+        delete_all_tags_action.triggered.connect(
+            self.image_list_model.delete_all_tags_in_directory)
+        edit_menu.addAction(delete_all_tags_action)
 
         view_menu = menu_bar.addMenu('View')
         self.toggle_image_list_action.setCheckable(True)
