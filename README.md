@@ -111,11 +111,27 @@ generate captions that contain the word `cat` and either `orange`, `white`,
 or `black`.
 It is not guaranteed that all of your specifications will be met.
 
-`Tags to exclude` (WD Tagger models): Tags that should not be generated,
-separated by commas.
+`Tags to exclude` (WD Tagger and PixAI Tagger models): Tags that should not
+be generated, separated by commas.
 
 Many of the other generation parameters are described in the
 [Hugging Face documentation](https://huggingface.co/docs/transformers/main/en/main_classes/text_generation#transformers.GenerationConfig).
+
+### Tagging models
+
+In addition to captioning models, the auto-captioner supports image tagging
+models, which return tags with probabilities instead of free-form captions:
+
+- WD Tagger models (`SmilingWolf/wd-...-tagger-...`): use a single minimum
+  probability and a maximum tag count.
+- PixAI Tagger (`pixai-labs/pixai-tagger-v1.0`): a 486M-parameter vision
+  transformer with a 30,877-tag vocabulary, run via its remote code with
+  PyTorch, so it supports GPU acceleration (and works on the CPU as well).
+  Its tags are grouped into categories (general, character, copyright, style,
+  meta, rating), and each category can be included or excluded and given its
+  own minimum probability; a minimum probability of 0 uses the model's
+  recommended threshold for the category. Set `Maximum tags` to cap how many
+  of the highest-probability tags are kept.
 
 ## Advanced Image List Filtering
 

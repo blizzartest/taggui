@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QAbstractScrollArea, QDockWidget, QFormLayout,
                                QVBoxLayout, QWidget)
 
 from auto_captioning.captioning_thread import CaptioningThread
+from auto_captioning.models.pixai_tagger import PixaiTagger
 from auto_captioning.models.wd_tagger import WdTagger
 from auto_captioning.models_list import MODELS, get_model_class
 from dialogs.caption_multiple_images_dialog import CaptionMultipleImagesDialog
@@ -140,6 +141,58 @@ class CaptionSettingsForm(QVBoxLayout):
                                        self.min_probability_spin_box)
         wd_tagger_settings_form.addRow('Maximum tags', self.max_tags_spin_box)
         wd_tagger_settings_form.addRow(tags_to_exclude_form)
+        self.pixai_tagger_settings_form_container = QWidget()
+        pixai_tagger_settings_form = QFormLayout(
+            self.pixai_tagger_settings_form_container)
+        pixai_tagger_settings_form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignRight)
+        pixai_tagger_settings_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.pixai_show_probabilities_check_box = SettingsBigCheckBox(
+            key='pixai_tagger_show_probabilities', default=True)
+        self.pixai_max_tags_spin_box = FocusedScrollSettingsSpinBox(
+            key='pixai_tagger_max_tags', default=30, minimum=1, maximum=999)
+        pixai_tagger_settings_form.addRow(
+            'Show probabilities', self.pixai_show_probabilities_check_box)
+        pixai_tagger_settings_form.addRow('Maximum tags',
+                                          self.pixai_max_tags_spin_box)
+        self.pixai_category_include_check_boxes = {}
+        self.pixai_min_probability_spin_boxes = {}
+        # A minimum probability of 0 means the model's recommended
+        # threshold for the category is used.
+        pixai_categories = ['general', 'character', 'copyright', 'style',
+                            'meta', 'rating']
+        for category in pixai_categories:
+            include_check_box = SettingsBigCheckBox(
+                key=f'pixai_tagger_include_{category}_tags', default=True)
+            min_probability_spin_box = FocusedScrollSettingsDoubleSpinBox(
+                key=f'pixai_tagger_{category}_min_probability', default=0,
+                minimum=0, maximum=1)
+            min_probability_spin_box.setSingleStep(0.01)
+            min_probability_spin_box.setSpecialValueText(
+                'Model recommended')
+            category_layout = QHBoxLayout()
+            category_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            category_layout.setContentsMargins(0, 0, 0, 0)
+            category_layout.addWidget(include_check_box)
+            category_layout.addWidget(min_probability_spin_box)
+            pixai_tagger_settings_form.addRow(category.title(),
+                                              category_layout)
+            self.pixai_category_include_check_boxes[category] = (
+                include_check_box)
+            self.pixai_min_probability_spin_boxes[category] = (
+                min_probability_spin_box)
+        pixai_tags_to_exclude_form = QFormLayout()
+        pixai_tags_to_exclude_form.setRowWrapPolicy(
+            QFormLayout.RowWrapPolicy.WrapAllRows)
+        pixai_tags_to_exclude_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.pixai_tags_to_exclude_text_edit = SettingsPlainTextEdit(
+            key='pixai_tagger_tags_to_exclude')
+        pixai_tags_to_exclude_form.addRow('Tags to exclude',
+                                         self.pixai_tags_to_exclude_text_edit)
+        set_text_edit_height(self.pixai_tags_to_exclude_text_edit, 4)
+        pixai_tagger_settings_form.addRow(pixai_tags_to_exclude_form)
 
         self.toggle_advanced_settings_form_button = TallPushButton(
             'Show Advanced Settings')
@@ -216,6 +269,7 @@ class CaptionSettingsForm(QVBoxLayout):
 
         self.addLayout(basic_settings_form)
         self.addWidget(self.wd_tagger_settings_form_container)
+        self.addWidget(self.pixai_tagger_settings_form_container)
         self.horizontal_line = HorizontalLine()
         self.addWidget(self.horizontal_line)
         self.addWidget(self.toggle_advanced_settings_form_button)
@@ -264,6 +318,7 @@ class CaptionSettingsForm(QVBoxLayout):
     @Slot(str)
     def show_settings_for_model(self, model_id: str):
         wd_tagger_widgets = [self.wd_tagger_settings_form_container]
+        pixai_tagger_widgets = [self.pixai_tagger_settings_form_container]
         # Device settings should be visible for all models, including WD tagger
         always_visible_widgets = [
             self.device_label,
@@ -272,7 +327,7 @@ class CaptionSettingsForm(QVBoxLayout):
             self.toggle_advanced_settings_form_button,
             self.advanced_settings_form_container
         ]
-        non_wd_tagger_widgets = [
+        non_tagger_widgets = [
             self.prompt_label,
             self.prompt_text_edit,
             self.caption_start_label,
@@ -281,10 +336,14 @@ class CaptionSettingsForm(QVBoxLayout):
             self.remove_tag_separators_container
         ]
         is_wd_tagger_model = get_model_class(model_id) == WdTagger
+        is_pixai_tagger_model = get_model_class(model_id) == PixaiTagger
+        is_tagger_model = is_wd_tagger_model or is_pixai_tagger_model
         for widget in wd_tagger_widgets:
             widget.setVisible(is_wd_tagger_model)
-        for widget in non_wd_tagger_widgets:
-            widget.setVisible(not is_wd_tagger_model)
+        for widget in pixai_tagger_widgets:
+            widget.setVisible(is_pixai_tagger_model)
+        for widget in non_tagger_widgets:
+            widget.setVisible(not is_tagger_model)
         for widget in always_visible_widgets:
             widget.setVisible(True)
         self.set_load_in_4_bit_visibility(self.device_combo_box.currentText())
@@ -293,7 +352,8 @@ class CaptionSettingsForm(QVBoxLayout):
     def set_load_in_4_bit_visibility(self, device: str):
         model_id = self.model_combo_box.currentText()
         is_wd_tagger_model = get_model_class(model_id) == WdTagger
-        if is_wd_tagger_model:
+        is_pixai_tagger_model = get_model_class(model_id) == PixaiTagger
+        if is_wd_tagger_model or is_pixai_tagger_model:
             self.load_in_4_bit_container.setVisible(False)
             return
         is_load_in_4_bit_available = (self.is_bitsandbytes_available
@@ -344,6 +404,23 @@ class CaptionSettingsForm(QVBoxLayout):
                 'max_tags': self.max_tags_spin_box.value(),
                 'tags_to_exclude':
                     self.tags_to_exclude_text_edit.toPlainText()
+            },
+            'pixai_tagger_settings': {
+                'show_probabilities':
+                    self.pixai_show_probabilities_check_box.isChecked(),
+                'max_tags': self.pixai_max_tags_spin_box.value(),
+                'tags_to_exclude':
+                    self.pixai_tags_to_exclude_text_edit.toPlainText(),
+                **{
+                    f'include_{category}_tags': check_box.isChecked()
+                    for category, check_box in
+                    self.pixai_category_include_check_boxes.items()
+                },
+                **{
+                    f'{category}_min_probability': spin_box.value()
+                    for category, spin_box in
+                    self.pixai_min_probability_spin_boxes.items()
+                }
             }
         }
 
