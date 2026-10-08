@@ -100,10 +100,12 @@ def write_tags_to_database(directory_path: Path,
 
 def migrate_txt_tags_to_database(directory_path: Path,
                                  tag_index: dict[Path, list[str]],
-                                 delete_txt_files: bool) -> tuple[int, int]:
+                                 delete_txt_files: bool,
+                                 tags_subfolder: str = '') \
+        -> tuple[int, int]:
     """
     Write the current tag index to the tag database, optionally deleting the
-    source .txt files.
+    source .txt files (both next to the images and in the tags subfolder).
 
     Returns: (migrated_count, deleted_txt_count)
     """
@@ -113,11 +115,19 @@ def migrate_txt_tags_to_database(directory_path: Path,
 
     deleted_txt_count = 0
     if delete_txt_files:
+        deleted_paths = set()
         for image_path in tag_index:
-            txt_path = image_path.with_suffix('.txt')
-            if txt_path.is_file():
+            txt_name = image_path.with_suffix('.txt').name
+            possible_txt_paths = [image_path.with_suffix('.txt')]
+            if tags_subfolder:
+                possible_txt_paths.append(
+                    image_path.parent / tags_subfolder / txt_name)
+            for txt_path in possible_txt_paths:
+                if txt_path in deleted_paths or not txt_path.is_file():
+                    continue
                 try:
                     txt_path.unlink()
+                    deleted_paths.add(txt_path)
                     deleted_txt_count += 1
                 except OSError as exception:
                     print(f'Failed to delete {txt_path}: {exception}',
