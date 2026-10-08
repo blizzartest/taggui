@@ -23,8 +23,8 @@ from PySide6.QtWidgets import QMessageBox
 UNDO_STACK_SIZE = 32
 SEARCH_RESULT_BATCH_SIZE = 5
 THUMBNAIL_WORKER_COUNT = 4
-THUMBNAIL_QUEUE_CAPACITY = 64
-THUMBNAIL_FLUSH_INTERVAL_MS = 60
+THUMBNAIL_QUEUE_CAPACITY = 192
+THUMBNAIL_FLUSH_INTERVAL_MS = 180
 
 
 def get_image_paths(directory_path: Path, image_suffixes: set[str]) -> set[Path]:
@@ -111,7 +111,7 @@ def load_image_metadata(image_path: Path, tag_separator: str,
             try:
                 caption = text_file_path.read_text(encoding='utf-8', errors='replace')
                 if caption:
-                    tags = caption.split(self.tag_separator)
+                    tags = caption.split(tag_separator)
                     tags = [tag.strip() for tag in tags]
                     tags = [tag for tag in tags if tag]
                     break  # Found tags, stop looking
