@@ -8,9 +8,11 @@ from auto_captioning.models.llava_next import (LlavaNext34b, LlavaNextMistral,
                                                LlavaNextVicuna)
 from auto_captioning.models.moondream import Moondream1, Moondream2
 from auto_captioning.models.phi_3_vision import Phi3Vision
+from auto_captioning.models.pixai_tagger import PixaiTagger
 from auto_captioning.models.wd_tagger import WdTagger
 
 MODELS = [
+    'pixai-labs/pixai-tagger-v1.0',
     'fancyfeast/llama-joycaption-beta-one-hf-llava',
     'microsoft/Florence-2-large-ft',
     'microsoft/Florence-2-large',
@@ -78,6 +80,8 @@ def get_model_class(model_id: str) -> type[AutoCaptioningModel]:
         return Moondream2
     if 'phi-3' in lowercase_model_id:
         return Phi3Vision
+    if 'pixai' in lowercase_model_id and 'tagger' in lowercase_model_id:
+        return PixaiTagger
     if 'wd' in lowercase_model_id and 'tagger' in lowercase_model_id:
         return WdTagger
     return AutoCaptioningModel
