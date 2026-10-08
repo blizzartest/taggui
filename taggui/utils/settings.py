@@ -11,6 +11,7 @@ DEFAULT_SETTINGS = {
     'autocomplete_tags': True,
     'models_directory_path': '',
     'tags_subfolder': '.tags',
+    'tags_storage_mode': 'single_file',
     'load_mode': 'full'
 }
 

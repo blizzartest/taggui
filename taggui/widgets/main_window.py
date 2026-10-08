@@ -195,6 +195,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent):
         """Save the window geometry and state before closing."""
+        self.image_list_model.save_tag_database()
         self.settings.setValue('geometry', self.saveGeometry())
         self.settings.setValue('window_state', self.saveState())
         super().closeEvent(event)
@@ -304,6 +305,38 @@ class MainWindow(QMainWindow):
         export_dialog.exec()
 
     @Slot()
+    def show_migrate_tags_dialog(self):
+        """Ask whether to migrate the tags of the loaded directory from
+        individual .txt caption files to the single tag database, and
+        whether to delete the .txt files afterwards."""
+        if not self.directory_path:
+            message_box = QMessageBox()
+            message_box.setWindowTitle('Migrate Tags')
+            message_box.setIcon(QMessageBox.Icon.Information)
+            message_box.setText('Please load a directory first.')
+            message_box.exec()
+            return
+        message_box = QMessageBox(parent=self)
+        message_box.setWindowTitle('Migrate Tags')
+        message_box.setIcon(QMessageBox.Icon.Question)
+        message_box.setText(
+            'Migrate the tags of the loaded directory from individual '
+            '.txt caption files to the tag database (tags.jsonl)?')
+        delete_button = message_box.addButton(
+            'Migrate and Delete .txt Files',
+            QMessageBox.ButtonRole.AcceptRole)
+        keep_button = message_box.addButton(
+            'Migrate and Keep .txt Files',
+            QMessageBox.ButtonRole.AcceptRole)
+        message_box.addButton(QMessageBox.StandardButton.Cancel)
+        message_box.exec()
+        clicked_button = message_box.clickedButton()
+        if clicked_button not in (delete_button, keep_button):
+            return
+        self.image_list_model.migrate_txt_tags_to_database(
+            delete_txt_files=clicked_button is delete_button)
+
+    @Slot()
     def remove_duplicate_tags(self):
         removed_tag_count = self.image_list_model.remove_duplicate_tags()
         message_box = QMessageBox()
@@ -389,6 +422,11 @@ class MainWindow(QMainWindow):
         remove_empty_tags_action.triggered.connect(
             self.remove_empty_tags)
         edit_menu.addAction(remove_empty_tags_action)
+        migrate_tags_action = QAction('Migrate .txt Tags to Tag Database...',
+                                       parent=self)
+        migrate_tags_action.triggered.connect(
+            self.show_migrate_tags_dialog)
+        edit_menu.addAction(migrate_tags_action)
 
         view_menu = menu_bar.addMenu('View')
         self.toggle_image_list_action.setCheckable(True)

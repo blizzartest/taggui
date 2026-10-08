@@ -14,6 +14,9 @@ import imagesize
 
 from utils.image import Image
 from utils.settings import DEFAULT_SETTINGS, get_settings
+from utils.tag_store import (get_tags_storage_mode, load_tags_from_database,
+                             migrate_txt_tags_to_database as migrate_db,
+                             write_tags_to_database)
 from utils.utils import get_confirmation_dialog_reply, pluralize
 from PySide6.QtCore import (QAbstractListModel, QModelIndex, QSize, Qt, Signal,
                             Slot, QTimer)
@@ -192,6 +195,13 @@ class ImageListModel(QAbstractListModel):
         self.image_list_selection_model = None
         self.load_mode = 'full'
         self.directory_path = None
+        self.image_suffixes = set()
+        self.tags_storage_mode = get_tags_storage_mode()
+        self.database_dirty = False
+        self.database_save_timer = QTimer(self)
+        self.database_save_timer.setSingleShot(True)
+        self.database_save_timer.setInterval(500)
+        self.database_save_timer.timeout.connect(self.save_tag_database)
         self.search_thread = None
         self.load_generation = 0
         self.pending_thumbnail_rows = set()
@@ -357,6 +367,8 @@ class ImageListModel(QAbstractListModel):
             self.flush_timer.stop()
 
     def load_directory(self, directory_path: Path):
+        self.save_tag_database()
+        self.database_save_timer.stop()
         self.cancel_background_loading()
         self.beginResetModel()
         self.images.clear()
@@ -380,6 +392,9 @@ class ImageListModel(QAbstractListModel):
         tags_subfolder = settings.value(
             'tags_subfolder',
             defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
+        self.image_suffixes = image_suffixes
+        
+        self.tags_storage_mode = get_tags_storage_mode()
         
         # Always build tag index
         self.build_tag_index(directory_path, image_suffixes, tags_subfolder)
@@ -387,8 +402,15 @@ class ImageListModel(QAbstractListModel):
         if self.load_mode == 'full':
             # Load all images with full data (existing behavior)
             image_paths = get_image_paths(directory_path, image_suffixes)
-            text_file_paths = get_text_file_paths(directory_path, tags_subfolder)
-            text_file_path_strings = {str(path) for path in text_file_paths}
+            if self.tags_storage_mode == 'single_file':
+                # Tags come from the tag index (which is backed by the tag
+                # database), so no per-image caption files need to be read.
+                text_file_path_strings = set()
+            else:
+                text_file_paths = get_text_file_paths(
+                    directory_path, tags_subfolder)
+                text_file_path_strings = {str(path)
+                                          for path in text_file_paths}
             
             # Use ThreadPoolExecutor for parallel loading
             num_workers = min(4, len(image_paths)) if image_paths else 1
@@ -405,6 +427,8 @@ class ImageListModel(QAbstractListModel):
                 # Collect results as they complete
                 for future in as_completed(future_to_path):
                     image_path, dimensions, tags = future.result()
+                    if self.tags_storage_mode == 'single_file':
+                        tags = self.tag_index.get(image_path, [])
                     image = Image(image_path, dimensions, tags, None, True)
                     loaded_images.append(image)
             
@@ -417,10 +441,30 @@ class ImageListModel(QAbstractListModel):
 
     def build_tag_index(self, directory_path: Path, image_suffixes: set[str],
                         tags_subfolder: str):
-        """Build an index of image paths to their tags from .txt files."""
-        text_file_paths = get_text_file_paths(directory_path, tags_subfolder)
+        """Build an index of image paths to their tags.
+
+        In single-file mode the index is loaded from the tag database
+        (tags.jsonl); .txt files are only used as a fallback when no
+        database exists yet.
+        """
         image_paths = get_image_paths(directory_path, image_suffixes)
         
+        if self.tags_storage_mode == 'single_file':
+            self.tag_index = load_tags_from_database(
+                directory_path, self.tag_separator)
+            if self.tag_index:
+                return
+        
+        self._build_tag_index_from_txt_files(directory_path, image_suffixes,
+                                              tags_subfolder)
+
+    def _build_tag_index_from_txt_files(self, directory_path: Path,
+                                         image_suffixes: set[str],
+                                         tags_subfolder: str):
+        """Build the tag index from individual .txt caption files."""
+        text_file_paths = get_text_file_paths(directory_path, tags_subfolder)
+        image_paths = get_image_paths(directory_path, image_suffixes)
+
         # Build a set of all valid image paths for quick lookup
         valid_image_paths = {str(p) for p in image_paths}
         
@@ -554,6 +598,18 @@ class ImageListModel(QAbstractListModel):
             'tags_subfolder',
             defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
         
+        # Keep the tag index up to date so that subsequent searches and
+        # the All Tags list reflect the edited tags.
+        self.tag_index[image.path] = image.tags.copy()
+        
+        if get_tags_storage_mode() == 'single_file':
+            # The tag database is rewritten as a whole; batch frequent tag
+            # edits with a debounce so that the file is not rewritten for
+            # every single edit.
+            self.database_dirty = True
+            self.database_save_timer.start()
+            return
+        
         # Determine where to write the tags file
         if tags_subfolder:
             tags_dir = image.path.parent / tags_subfolder
@@ -567,15 +623,58 @@ class ImageListModel(QAbstractListModel):
             text_file_path.write_text(
                 self.tag_separator.join(image.tags), encoding='utf-8',
                 errors='replace')
-            # Keep the tag index up to date so that subsequent searches and
-            # the All Tags list reflect the edited tags.
-            if image.path in self.tag_index:
-                self.tag_index[image.path] = image.tags.copy()
         except OSError:
             error_message_box = QMessageBox()
             error_message_box.setWindowTitle('Error')
             error_message_box.setIcon(QMessageBox.Icon.Critical)
             error_message_box.setText(f'Failed to save tags for {image.path}.')
+            error_message_box.exec()
+
+    @Slot()
+    def migrate_txt_tags_to_database(self, delete_txt_files: bool = True):
+        """Migrate the tags of the loaded directory from individual .txt
+        caption files to the tag database."""
+        if self.directory_path is None:
+            QMessageBox.information(None, 'Migrate Tags',
+                                    'Load a directory first.')
+            return
+        settings = get_settings()
+        tags_subfolder = settings.value(
+            'tags_subfolder',
+            defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
+        self._build_tag_index_from_txt_files(self.directory_path,
+                                              self.image_suffixes,
+                                              tags_subfolder)
+        try:
+            migrated_count, deleted_txt_count = migrate_db(
+                self.directory_path, self.tag_index, delete_txt_files)
+        except OSError:
+            QMessageBox.critical(None, 'Migrate Tags',
+                                'Failed to write the tag database.')
+            return
+        self.database_dirty = False
+        QMessageBox.information(
+            None, 'Migrate Tags',
+            f'Migrated tags for {migrated_count} '
+            f'{pluralize("image", migrated_count)} to the tag database'
+            + (f' and deleted {deleted_txt_count} '
+               f'{pluralize("caption file", deleted_txt_count)}.'
+               if delete_txt_files else '.'))
+
+    @Slot()
+    def save_tag_database(self):
+        """Write the tag index to the tag database if there are unsaved
+        changes."""
+        if not self.database_dirty or self.directory_path is None:
+            return
+        try:
+            write_tags_to_database(self.directory_path, self.tag_index)
+            self.database_dirty = False
+        except OSError:
+            error_message_box = QMessageBox()
+            error_message_box.setWindowTitle('Error')
+            error_message_box.setIcon(QMessageBox.Icon.Critical)
+            error_message_box.setText('Failed to save the tag database.')
             error_message_box.exec()
 
     def restore_history_tags(self, is_undo: bool):
