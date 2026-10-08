@@ -18,7 +18,7 @@ from pyparsing import (CaselessKeyword, CaselessLiteral, Group, OpAssoc,
 
 from models.proxy_image_list_model import ProxyImageListModel
 from utils.image import Image
-from utils.settings import get_settings
+from utils.settings import DEFAULT_SETTINGS, get_settings
 from utils.settings_widgets import (SettingsBigCheckBox, SettingsComboBox)
 from utils.utils import get_confirmation_dialog_reply, pluralize
 
@@ -108,6 +108,11 @@ class SortMode(str, Enum):
     RANDOM = 'Random'
 
 
+class ViewMode(str, Enum):
+    LIST = 'List'
+    GRID = 'Grid'
+
+
 class ImageListView(QListView):
     tags_paste_requested = Signal(list, list)
     directory_reload_requested = Signal()
@@ -122,6 +127,9 @@ class ImageListView(QListView):
         # If the actual height of the image is greater than 3 times the width,
         # the image will be scaled down to fit.
         self.setIconSize(QSize(image_width, image_width * 3))
+        self.setUniformItemSizes(True)
+        self.image_width = image_width
+        self.set_view_mode(ViewMode.LIST)
 
         invert_selection_action = self.addAction('Invert Selection')
         invert_selection_action.setShortcut('Ctrl+I')
@@ -178,6 +186,21 @@ class ImageListView(QListView):
 
     def contextMenuEvent(self, event):
         self.context_menu.exec_(event.globalPos())
+
+    def set_view_mode(self, view_mode: str):
+        if view_mode == ViewMode.GRID:
+            self.setViewMode(QListView.ViewMode.IconMode)
+            self.setMovement(QListView.Movement.Static)
+            self.setResizeMode(QListView.ResizeMode.Adjust)
+            self.setSpacing(8)
+            self.setGridSize(QSize(self.image_width + 16,
+                                   self.image_width * 3 + 16))
+        else:
+            self.setViewMode(QListView.ViewMode.ListMode)
+            self.setMovement(QListView.Movement.Static)
+            self.setResizeMode(QListView.ResizeMode.Fixed)
+            self.setSpacing(0)
+            self.setGridSize(QSize())
 
     @Slot()
     def invert_selection(self):
@@ -365,6 +388,13 @@ class ImageList(QDockWidget):
         selection_mode_layout.addWidget(selection_mode_label)
         selection_mode_layout.addWidget(self.selection_mode_combo_box,
                                         stretch=1)
+        view_mode_label = QLabel('View mode')
+        self.view_mode_combo_box = SettingsComboBox(
+            key='image_list_view_mode',
+            default=DEFAULT_SETTINGS['image_list_view_mode'])
+        self.view_mode_combo_box.addItems(list(ViewMode))
+        selection_mode_layout.addWidget(view_mode_label)
+        selection_mode_layout.addWidget(self.view_mode_combo_box, stretch=1)
         self.list_view = ImageListView(self, proxy_image_list_model,
                                        tag_separator, image_width)
         self.image_index_label = QLabel()
@@ -380,6 +410,10 @@ class ImageList(QDockWidget):
         self.selection_mode_combo_box.currentTextChanged.connect(
             self.set_selection_mode)
         self.set_selection_mode(self.selection_mode_combo_box.currentText())
+        self.view_mode_combo_box.currentTextChanged.connect(
+            self.list_view.set_view_mode)
+        self.list_view.set_view_mode(
+            self.view_mode_combo_box.currentText())
 
         sort_mode_layout = QHBoxLayout()
         sort_mode_label = QLabel('Sort by')
