@@ -212,16 +212,18 @@ class ImageListView(QListView):
             self.item_delegate.set_grid_mode(True)
             self.setUniformItemSizes(True)
             self.setWordWrap(False)
+            self.setIconSize(QSize(self.image_width, self.image_width))
             self.setViewMode(QListView.ViewMode.IconMode)
             self.setMovement(QListView.Movement.Static)
             self.setResizeMode(QListView.ResizeMode.Adjust)
             self.setSpacing(2)
-            self.setGridSize(QSize(self.image_width + 8,
-                                   self.image_width * 3 + 32))
+            self.setGridSize(QSize(self.image_width + 4,
+                                   self.image_width + 32))
         else:
             self.item_delegate.set_grid_mode(False)
             self.setUniformItemSizes(False)
             self.setWordWrap(True)
+            self.setIconSize(QSize(self.image_width, self.image_width * 3))
             self.setViewMode(QListView.ViewMode.ListMode)
             self.setMovement(QListView.Movement.Static)
             self.setResizeMode(QListView.ResizeMode.Fixed)
