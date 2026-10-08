@@ -73,3 +73,12 @@ class TagCounterModel(QAbstractListModel):
             self.tag_counter.update(image.tags)
         self.most_common_tags = self.tag_counter.most_common()
         self.modelReset.emit()
+
+    @Slot()
+    def count_indexed_tags(self, tag_index: dict):
+        """Count tags from a tag index instead of loaded images."""
+        self.tag_counter.clear()
+        for tags in tag_index.values():
+            self.tag_counter.update(tags)
+        self.most_common_tags = self.tag_counter.most_common()
+        self.modelReset.emit()

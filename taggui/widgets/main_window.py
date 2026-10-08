@@ -261,6 +261,10 @@ class MainWindow(QMainWindow):
         select_index = self.settings.value(select_index_key, type=int) or 0
         self.load_directory(self.directory_path)
         self.image_list.filter_line_edit.setText(filter_text)
+        # The filter is only applied on Enter in tags-only mode.
+        if (filter_text
+                and self.image_list_model.load_mode == 'tags_only'):
+            self.set_image_list_filter()
         # If the selected image index is out of bounds due to images being
         # deleted, select the last image.
         if select_index >= self.proxy_image_list_model.rowCount():
@@ -438,9 +442,14 @@ class MainWindow(QMainWindow):
         if self.image_list_model.load_mode == 'tags_only':
             # In tags-only mode, load matching images
             self.image_list_model.load_matching_images(filter_)
+            # The matching images are already filtered, so the proxy filter
+            # must not filter them again.
+            self.proxy_image_list_model.filter = None
+            self.proxy_image_list_model.invalidateFilter()
             # After loading, we need to re-apply the filter through proxy
             # For now, just select first if there are results
-            if self.proxy_image_list_model.rowCount() > 0:
+            if (filter_ is not None
+                    and self.proxy_image_list_model.rowCount() > 0):
                 self.image_list.list_view.setCurrentIndex(
                     self.proxy_image_list_model.index(0, 0))
         else:
@@ -472,8 +481,35 @@ class MainWindow(QMainWindow):
                         else 'filtered_image_index')
         self.settings.setValue(settings_key, proxy_image_index.row())
 
+    @Slot()
+    def handle_image_filter_text_changed(self):
+        """
+        In tags-only mode, only clear the loaded images immediately when the
+        filter text is cleared; loading new results requires pressing Enter.
+        In full mode, the filter is applied live as before.
+        """
+        if self.image_list_model.load_mode != 'tags_only':
+            self.set_image_list_filter()
+            return
+        if not self.image_list.filter_line_edit.text():
+            self.set_image_list_filter()
+
+    def update_tag_counter(self):
+        """
+        In tags-only mode, show all tags from the tag index in the all tags
+        list; otherwise show the tags of the currently loaded images.
+        """
+        if (self.image_list_model.load_mode == 'tags_only'
+                and self.image_list_model.tag_index):
+            self.tag_counter_model.count_indexed_tags(
+                self.image_list_model.tag_index)
+        else:
+            self.tag_counter_model.count_tags(self.image_list_model.images)
+
     def connect_image_list_signals(self):
         self.image_list.filter_line_edit.textChanged.connect(
+            self.handle_image_filter_text_changed)
+        self.image_list.filter_line_edit.returnPressed.connect(
             self.set_image_list_filter)
         self.image_list_selection_model.currentChanged.connect(
             self.save_image_index)
@@ -483,12 +519,8 @@ class MainWindow(QMainWindow):
             self.image_viewer.load_image)
         self.image_list_selection_model.currentChanged.connect(
             self.image_tags_editor.load_image_tags)
-        self.image_list_model.modelReset.connect(
-            lambda: self.tag_counter_model.count_tags(
-                self.image_list_model.images))
-        self.image_list_model.dataChanged.connect(
-            lambda: self.tag_counter_model.count_tags(
-                self.image_list_model.images))
+        self.image_list_model.modelReset.connect(self.update_tag_counter)
+        self.image_list_model.dataChanged.connect(self.update_tag_counter)
         self.image_list_model.dataChanged.connect(
             self.image_tags_editor.reload_image_tags_if_changed)
         self.image_list_model.update_undo_and_redo_actions_requested.connect(
@@ -564,6 +596,9 @@ class MainWindow(QMainWindow):
                                 .replace('"', r'\"').replace("'", r"\'"))
         self.image_list.filter_line_edit.setText(
             f'tag:"{escaped_selected_tag}"')
+        # The filter is only applied on Enter in tags-only mode, so apply it
+        # immediately here.
+        self.set_image_list_filter()
 
     @Slot(str)
     def add_tag_to_selected_images(self, tag: str):
