@@ -647,7 +647,8 @@ class ImageListModel(QAbstractListModel):
                                               tags_subfolder)
         try:
             migrated_count, deleted_txt_count = migrate_db(
-                self.directory_path, self.tag_index, delete_txt_files)
+                self.directory_path, self.tag_index, delete_txt_files,
+                tags_subfolder)
         except OSError:
             QMessageBox.critical(None, 'Migrate Tags',
                                 'Failed to write the tag database.')
