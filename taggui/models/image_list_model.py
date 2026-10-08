@@ -2,6 +2,7 @@ import random
 import re
 import sys
 import threading
+import queue
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -15,12 +16,15 @@ from utils.image import Image
 from utils.settings import DEFAULT_SETTINGS, get_settings
 from utils.utils import get_confirmation_dialog_reply, pluralize
 from PySide6.QtCore import (QAbstractListModel, QModelIndex, QSize, Qt, Signal,
-                            Slot)
+                            Slot, QTimer)
 from PySide6.QtGui import QIcon, QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
 UNDO_STACK_SIZE = 32
 SEARCH_RESULT_BATCH_SIZE = 5
+THUMBNAIL_WORKER_COUNT = 4
+THUMBNAIL_QUEUE_CAPACITY = 64
+THUMBNAIL_FLUSH_INTERVAL_MS = 60
 
 
 def get_image_paths(directory_path: Path, image_suffixes: set[str]) -> set[Path]:
@@ -175,7 +179,6 @@ def txt_to_image_path(text_path: Path, tags_subfolder: str,
 class ImageListModel(QAbstractListModel):
     update_undo_and_redo_actions_requested = Signal()
     search_batch_loaded = Signal(list, int)
-    thumbnail_loaded = Signal(Image, object, int)  # object: QImage
 
     def __init__(self, image_list_image_width: int, tag_separator: str):
         super().__init__()
@@ -191,9 +194,19 @@ class ImageListModel(QAbstractListModel):
         self.directory_path = None
         self.search_thread = None
         self.load_generation = 0
-        self.pending_thumbnail_paths = set()
+        self.pending_thumbnail_rows = set()
+        self.failed_thumbnail_paths = set()
+        self.thumbnail_task_lock = threading.Lock()
+        self.thumbnail_task_queue = queue.PriorityQueue()
+        self.completed_thumbnails = queue.Queue(maxsize=THUMBNAIL_QUEUE_CAPACITY)
+        self.thumbnail_task_sequence = 0
+        self.flush_timer = QTimer(self)
+        self.flush_timer.setInterval(THUMBNAIL_FLUSH_INTERVAL_MS)
+        self.flush_timer.timeout.connect(self.flush_completed_thumbnails)
         self.search_batch_loaded.connect(self.add_search_batch)
-        self.thumbnail_loaded.connect(self.set_loaded_thumbnail)
+        for _ in range(THUMBNAIL_WORKER_COUNT):
+            threading.Thread(target=self.thumbnail_worker_loop,
+                            daemon=True).start()
 
     def rowCount(self, parent=None) -> int:
         return len(self.images)
@@ -217,8 +230,12 @@ class ImageListModel(QAbstractListModel):
                 return image.thumbnail
             if not image.is_fully_loaded:
                 # In tags-only mode, generate the thumbnail in the
-                # background so that the list stays responsive.
-                self.load_thumbnail_async(image, row)
+                # background so that the list stays responsive. Visible
+                # images are prioritized over the preloading of the rest of
+                # the folder.
+                self.submit_thumbnail_task(image, row, to_front=True)
+                if not self.flush_timer.isActive():
+                    self.flush_timer.start()
                 return None
             image_reader = QImageReader(str(image.path))
             # Rotate the image based on the orientation tag.
@@ -252,35 +269,92 @@ class ImageListModel(QAbstractListModel):
             self.image_list_image_width,
             Qt.TransformationMode.SmoothTransformation)
 
-    def load_thumbnail_async(self, image: Image, row: int):
+    def submit_thumbnail_task(self, image: Image, row: int,
+                              to_front: bool = False):
         """
-        Generate the thumbnail for an image in a background thread and store
-        it on the image once it is ready.
+        Queue an image for thumbnail generation in the background. Tasks for
+        images that are currently visible are put at the front of the queue
+        so that they are prioritized over the preloading of the rest of the
+        folder. Tasks are deduplicated per row, so moving through the list
+        does not queue duplicates.
         """
-        if image.path in self.pending_thumbnail_paths:
+        if (image.thumbnail or row in self.pending_thumbnail_rows
+                or image.path in self.failed_thumbnail_paths):
             return
-        self.pending_thumbnail_paths.add(image.path)
+        self.pending_thumbnail_rows.add(row)
+        generation = self.load_generation
+        # Visible images get priority 0 and are generated first; preloading
+        # tasks get priority 1. The sequence number keeps the order stable
+        # within each priority class.
+        priority = 0 if to_front else 1
+        with self.thumbnail_task_lock:
+            self.thumbnail_task_sequence += 1
+            sequence = self.thumbnail_task_sequence
+        self.thumbnail_task_queue.put((priority, sequence, image, row,
+                                       generation))
 
-        def worker():
+    def thumbnail_worker_loop(self):
+        while True:
+            priority, sequence, image, row, generation = (
+                self.thumbnail_task_queue.get())
+            if generation != self.load_generation:
+                self.completed_thumbnails.put((image, None, row, generation))
+                continue
             try:
                 thumbnail = self.load_thumbnail_for_image(image)
             except Exception:
                 thumbnail = None
-            self.thumbnail_loaded.emit(image, thumbnail, row)
+            # The completed queue is bounded; block until the GUI thread has
+            # flushed enough results. This throttles the workers so that the
+            # GUI thread is never flooded with thumbnail updates.
+            self.completed_thumbnails.put((image, thumbnail, row, generation))
 
-        threading.Thread(target=worker, daemon=True).start()
-
-    @Slot(Image, object, int)
-    def set_loaded_thumbnail(self, image: Image, thumbnail, row: int):
-        """Store a thumbnail generated in the background."""
-        self.pending_thumbnail_paths.discard(image.path)
-        if thumbnail is None:
-            return
-        if not (0 <= row < len(self.images)) or self.images[row] is not image:
-            return
-        image.thumbnail = QIcon(QPixmap.fromImage(thumbnail))
-        image.is_fully_loaded = True
-        self.dataChanged.emit(self.index(row), self.index(row))
+    @Slot()
+    def flush_completed_thumbnails(self):
+        """
+        Store all thumbnails that were completed in the background since the
+        last flush and emit a single data-changed signal for them. This
+        limits the repaint work on the GUI thread to one update per flush
+        interval.
+        """
+        first_row = None
+        last_row = None
+        while True:
+            try:
+                image, thumbnail, row, generation = (
+                    self.completed_thumbnails.get_nowait())
+            except queue.Empty:
+                break
+            self.pending_thumbnail_rows.discard(row)
+            if not (0 <= row < len(self.images)) or self.images[row] is not image:
+                # The image list changed while the thumbnail was being
+                # generated. Queue the image that is now at this row, if any.
+                if 0 <= row < len(self.images):
+                    self.submit_thumbnail_task(self.images[row], row,
+                                               to_front=True)
+                continue
+            if generation != self.load_generation:
+                continue
+            if thumbnail is None:
+                # Decoding failed; do not try again to avoid an endless
+                # retry loop for broken images.
+                self.failed_thumbnail_paths.add(image.path)
+                continue
+            image.thumbnail = QIcon(QPixmap.fromImage(thumbnail))
+            image.is_fully_loaded = True
+            if first_row is None or row < first_row:
+                first_row = row
+            if last_row is None or row > last_row:
+                last_row = row
+        if first_row is not None:
+            self.dataChanged.emit(self.index(first_row),
+                                  self.index(last_row))
+        if (self.completed_thumbnails.empty()
+                and self.thumbnail_task_queue.empty()
+                and not self.pending_thumbnail_rows):
+            # Nothing is queued, in flight or pending, so the flush timer can
+            # stop until the next thumbnail task is submitted.
+            self.flush_timer.stop()
 
     def load_directory(self, directory_path: Path):
         self.cancel_background_loading()
@@ -451,6 +525,11 @@ class ImageListModel(QAbstractListModel):
                              first_row + len(batch) - 1)
         self.images.extend(batch)
         self.endInsertRows()
+        # Preload the thumbnails of the new images in the background.
+        for row, image in enumerate(batch, start=first_row):
+            self.submit_thumbnail_task(image, row)
+        if not self.flush_timer.isActive():
+            self.flush_timer.start()
 
     def cancel_background_loading(self):
         """Cancel any in-progress background search loading."""
