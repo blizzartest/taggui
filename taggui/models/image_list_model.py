@@ -1,6 +1,7 @@
 import random
 import re
 import sys
+import threading
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -15,10 +16,11 @@ from utils.settings import DEFAULT_SETTINGS, get_settings
 from utils.utils import get_confirmation_dialog_reply, pluralize
 from PySide6.QtCore import (QAbstractListModel, QModelIndex, QSize, Qt, Signal,
                             Slot)
-from PySide6.QtGui import QIcon, QImageReader, QPixmap
+from PySide6.QtGui import QIcon, QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
 UNDO_STACK_SIZE = 32
+SEARCH_RESULT_BATCH_SIZE = 5
 
 
 def get_image_paths(directory_path: Path, image_suffixes: set[str]) -> set[Path]:
@@ -105,7 +107,7 @@ def load_image_metadata(image_path: Path, tag_separator: str,
             try:
                 caption = text_file_path.read_text(encoding='utf-8', errors='replace')
                 if caption:
-                    tags = caption.split(tag_separator)
+                    tags = caption.split(self.tag_separator)
                     tags = [tag.strip() for tag in tags]
                     tags = [tag for tag in tags if tag]
                     break  # Found tags, stop looking
@@ -129,8 +131,51 @@ class Scope(str, Enum):
     SELECTED_IMAGES = 'Selected images'
 
 
+def txt_to_image_path(text_path: Path, tags_subfolder: str,
+                       image_suffixes: set[str] | None = None) -> Path | None:
+    """Convert a .txt file path back to its corresponding image path."""
+    # Remove .txt suffix
+    base_name = text_path.stem
+    parent_dir = text_path.parent
+    
+    # If the text file is in a tags subfolder, the image is in the parent
+    if tags_subfolder and parent_dir.name == tags_subfolder:
+        parent_dir = parent_dir.parent
+    
+    # Determine which suffixes to try
+    if image_suffixes is None:
+        # Default common image suffixes
+        image_suffixes = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp'}
+    
+    # Find the corresponding image file
+    for suffix in image_suffixes:
+        image_path = parent_dir / (base_name + suffix)
+        if image_path.exists():
+            return image_path
+    
+    # Also check if the text file is named exactly like the image
+    # (e.g., image.jpg.txt)
+    if text_path.suffix == '.txt':
+        # Try removing .txt and checking if the result is a valid image
+        possible_image_path = parent_dir / text_path.stem
+        if possible_image_path.exists() and possible_image_path.suffix.lower() in image_suffixes:
+            return possible_image_path
+        
+        # Also handle double extensions like "image.jpg.txt"
+        stem_stem = text_path.stem
+        if '.' in stem_stem:
+            # Try splitting at the last dot
+            possible_image_path = parent_dir / stem_stem
+            if possible_image_path.exists() and possible_image_path.suffix.lower() in image_suffixes:
+                return possible_image_path
+    
+    return None
+
+
 class ImageListModel(QAbstractListModel):
     update_undo_and_redo_actions_requested = Signal()
+    search_batch_loaded = Signal(list, int)
+    thumbnail_loaded = Signal(Image, object, int)  # object: QImage
 
     def __init__(self, image_list_image_width: int, tag_separator: str):
         super().__init__()
@@ -144,12 +189,18 @@ class ImageListModel(QAbstractListModel):
         self.image_list_selection_model = None
         self.load_mode = 'full'
         self.directory_path = None
+        self.search_thread = None
+        self.load_generation = 0
+        self.pending_thumbnail_paths = set()
+        self.search_batch_loaded.connect(self.add_search_batch)
+        self.thumbnail_loaded.connect(self.set_loaded_thumbnail)
 
     def rowCount(self, parent=None) -> int:
         return len(self.images)
 
     def data(self, index, role=None) -> Image | str | QIcon | QSize:
-        image = self.images[index.row()]
+        row = index.row()
+        image = self.images[row]
         if role == Qt.ItemDataRole.UserRole:
             return image
         if role == Qt.ItemDataRole.DisplayRole:
@@ -165,8 +216,10 @@ class ImageListModel(QAbstractListModel):
             if image.thumbnail:
                 return image.thumbnail
             if not image.is_fully_loaded:
-                # In tags-only mode, generate thumbnail on demand
-                return self.load_thumbnail_for_image(image)
+                # In tags-only mode, generate the thumbnail in the
+                # background so that the list stays responsive.
+                self.load_thumbnail_async(image, row)
+                return None
             image_reader = QImageReader(str(image.path))
             # Rotate the image based on the orientation tag.
             image_reader.setAutoTransform(True)
@@ -188,22 +241,50 @@ class ImageListModel(QAbstractListModel):
             return QSize(self.image_list_image_width,
                          int(self.image_list_image_width * height / width))
 
-    def load_thumbnail_for_image(self, image: Image) -> QIcon | None:
-        """Load and generate thumbnail for a single image."""
-        try:
-            image_reader = QImageReader(str(image.path))
-            image_reader.setAutoTransform(True)
-            pixmap = QPixmap.fromImageReader(image_reader).scaledToWidth(
-                self.image_list_image_width,
-                Qt.TransformationMode.SmoothTransformation)
-            thumbnail = QIcon(pixmap)
-            image.thumbnail = thumbnail
-            image.is_fully_loaded = True
-            return thumbnail
-        except Exception:
+    def load_thumbnail_for_image(self, image: Image) -> QImage | None:
+        """Load and generate a thumbnail image for a single image."""
+        image_reader = QImageReader(str(image.path))
+        image_reader.setAutoTransform(True)
+        qimage = image_reader.read()
+        if qimage.isNull():
             return None
+        return qimage.scaledToWidth(
+            self.image_list_image_width,
+            Qt.TransformationMode.SmoothTransformation)
+
+    def load_thumbnail_async(self, image: Image, row: int):
+        """
+        Generate the thumbnail for an image in a background thread and store
+        it on the image once it is ready.
+        """
+        if image.path in self.pending_thumbnail_paths:
+            return
+        self.pending_thumbnail_paths.add(image.path)
+
+        def worker():
+            try:
+                thumbnail = self.load_thumbnail_for_image(image)
+            except Exception:
+                thumbnail = None
+            self.thumbnail_loaded.emit(image, thumbnail, row)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(Image, object, int)
+    def set_loaded_thumbnail(self, image: Image, thumbnail, row: int):
+        """Store a thumbnail generated in the background."""
+        self.pending_thumbnail_paths.discard(image.path)
+        if thumbnail is None:
+            return
+        if not (0 <= row < len(self.images)) or self.images[row] is not image:
+            return
+        image.thumbnail = QIcon(QPixmap.fromImage(thumbnail))
+        image.is_fully_loaded = True
+        self.dataChanged.emit(self.index(row), self.index(row))
 
     def load_directory(self, directory_path: Path):
+        self.cancel_background_loading()
+        self.beginResetModel()
         self.images.clear()
         self.tag_index.clear()
         self.undo_stack.clear()
@@ -258,7 +339,7 @@ class ImageListModel(QAbstractListModel):
             
             self.images = loaded_images
         
-        self.modelReset.emit()
+        self.endResetModel()
 
     def build_tag_index(self, directory_path: Path, image_suffixes: set[str],
                         tags_subfolder: str):
@@ -269,62 +350,32 @@ class ImageListModel(QAbstractListModel):
         # Build a set of all valid image paths for quick lookup
         valid_image_paths = {str(p) for p in image_paths}
         
-        for text_path in text_file_paths:
-            # Map .txt path back to image path
-            image_path = self.txt_to_image_path(text_path, tags_subfolder,
-                                                  image_suffixes)
-            if not image_path or str(image_path) not in valid_image_paths:
-                continue
-            
+        def load_tags_from_text_file(text_path: Path):
+            image_path = txt_to_image_path(text_path, tags_subfolder,
+                                           image_suffixes)
+            if image_path is None or str(image_path) not in valid_image_paths:
+                return None
             try:
-                caption = text_path.read_text(encoding='utf-8', errors='replace')
-                if caption:
-                    tags = caption.split(self.tag_separator)
-                    tags = [tag.strip() for tag in tags if tag.strip()]
-                    self.tag_index[image_path] = tags
+                caption = text_path.read_text(encoding='utf-8',
+                                              errors='replace')
             except OSError as exception:
                 print(f'Failed to read tags for {text_path}: '
                       f'{exception}', file=sys.stderr)
+                return None
+            if not caption:
+                return None
+            tags = caption.split(self.tag_separator)
+            return image_path, [tag.strip() for tag in tags if tag.strip()]
 
-    def txt_to_image_path(self, text_path: Path, tags_subfolder: str,
-                           image_suffixes: set[str] | None = None) -> Path | None:
-        """Convert a .txt file path back to its corresponding image path."""
-        # Remove .txt suffix
-        base_name = text_path.stem
-        parent_dir = text_path.parent
-        
-        # If the text file is in a tags subfolder, the image is in the parent
-        if tags_subfolder and parent_dir.name == tags_subfolder:
-            parent_dir = parent_dir.parent
-        
-        # Determine which suffixes to try
-        if image_suffixes is None:
-            # Default common image suffixes
-            image_suffixes = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp'}
-        
-        # Find the corresponding image file
-        for suffix in image_suffixes:
-            image_path = parent_dir / (base_name + suffix)
-            if image_path.exists():
-                return image_path
-        
-        # Also check if the text file is named exactly like the image
-        # (e.g., image.jpg.txt)
-        if text_path.suffix == '.txt':
-            # Try removing .txt and checking if the result is a valid image
-            possible_image_path = parent_dir / text_path.stem
-            if possible_image_path.exists() and possible_image_path.suffix.lower() in image_suffixes:
-                return possible_image_path
-            
-            # Also handle double extensions like "image.jpg.txt"
-            stem_stem = text_path.stem
-            if '.' in stem_stem:
-                # Try splitting at the last dot
-                possible_image_path = parent_dir / stem_stem
-                if possible_image_path.exists() and possible_image_path.suffix.lower() in image_suffixes:
-                    return possible_image_path
-        
-        return None
+        # Read the text files in parallel; this is the slowest part of
+        # building the tag index.
+        num_workers = min(4, len(text_file_paths)) if text_file_paths else 1
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            for result in executor.map(load_tags_from_text_file,
+                                        text_file_paths):
+                if result is not None:
+                    image_path, tags = result
+                    self.tag_index[image_path] = tags
 
     def image_matches_filter(self, image_path: Path, tags: list[str],
                               filter_):
@@ -349,45 +400,65 @@ class ImageListModel(QAbstractListModel):
 
     def load_matching_images(self, filter_):
         """Load full image data only for images matching the filter."""
+        self.cancel_background_loading()
+        self.beginResetModel()
         self.images.clear()
-        
-        if filter_ is None:
-            # No filter in tags-only mode with no filter -> show nothing
-            self.modelReset.emit()
-            return
-        
-        # Find matching paths from tag index
-        matching_paths = []
-        for image_path, tags in self.tag_index.items():
-            if self.image_matches_filter(image_path, tags, filter_):
-                matching_paths.append(image_path)
-        
-        # Load full data for matches only
-        loaded_images = self.load_full_data_for_paths(matching_paths)
-        self.images = loaded_images
-        
-        self.modelReset.emit()
+        self.endResetModel()
 
-    def load_full_data_for_paths(self, image_paths: list[Path]) -> list[Image]:
-        """Load full image data (dimensions + tags) for a list of paths."""
-        settings = get_settings()
-        tags_subfolder = settings.value(
-            'tags_subfolder',
-            defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
-        
-        text_file_paths = get_text_file_paths(self.directory_path, tags_subfolder)
-        text_file_path_strings = {str(path) for path in text_file_paths}
-        
-        loaded_images = []
-        for image_path in sorted(image_paths):
-            # Load metadata for this image
-            image_path_result, dimensions, tags = load_image_metadata(
-                image_path, self.tag_separator, text_file_path_strings,
-                tags_subfolder)
-            image = Image(image_path_result, dimensions, tags, None, True)
-            loaded_images.append(image)
-        
-        return loaded_images
+        if filter_ is None:
+            return
+
+        self.load_generation += 1
+        generation = self.load_generation
+
+        def worker():
+            # Find matching paths from the tag index and append them in
+            # batches. This is done in the background so that even very
+            # large tag indexes do not block the interface. The tags are
+            # already in the tag index and thumbnails are generated on
+            # demand, so no file I/O is needed.
+            matching_images = []
+            for image_path, tags in self.tag_index.items():
+                if generation != self.load_generation:
+                    return
+                if self.image_matches_filter(image_path, tags, filter_):
+                    matching_images.append((image_path, tags))
+            if not matching_images:
+                return
+            matching_images.sort(key=lambda path_and_tags: path_and_tags[0])
+            batch = []
+            for image_path, tags in matching_images:
+                if generation != self.load_generation:
+                    return
+                batch.append(Image(image_path, None, tags.copy(), None,
+                                  False))
+                if len(batch) >= SEARCH_RESULT_BATCH_SIZE:
+                    self.search_batch_loaded.emit(batch, generation)
+                    batch = []
+            if batch and generation == self.load_generation:
+                self.search_batch_loaded.emit(batch, generation)
+
+        self.search_thread = threading.Thread(target=worker, daemon=True)
+        self.search_thread.start()
+
+    @Slot(list, int)
+    def add_search_batch(self, batch: list[Image], generation: int):
+        """Append a batch of search results on the GUI thread."""
+        if generation != self.load_generation:
+            return
+        first_row = len(self.images)
+        self.beginInsertRows(QModelIndex(), first_row,
+                             first_row + len(batch) - 1)
+        self.images.extend(batch)
+        self.endInsertRows()
+
+    def cancel_background_loading(self):
+        """Cancel any in-progress background search loading."""
+        if self.search_thread is None:
+            return
+        self.load_generation += 1
+        self.search_thread.join()
+        self.search_thread = None
 
     def add_to_undo_stack(self, action_name: str,
                           should_ask_for_confirmation: bool):
@@ -417,6 +488,10 @@ class ImageListModel(QAbstractListModel):
             text_file_path.write_text(
                 self.tag_separator.join(image.tags), encoding='utf-8',
                 errors='replace')
+            # Keep the tag index up to date so that subsequent searches and
+            # the All Tags list reflect the edited tags.
+            if image.path in self.tag_index:
+                self.tag_index[image.path] = image.tags.copy()
         except OSError:
             error_message_box = QMessageBox()
             error_message_box.setWindowTitle('Error')

@@ -446,12 +446,9 @@ class MainWindow(QMainWindow):
             # must not filter them again.
             self.proxy_image_list_model.filter = None
             self.proxy_image_list_model.invalidateFilter()
-            # After loading, we need to re-apply the filter through proxy
-            # For now, just select first if there are results
-            if (filter_ is not None
-                    and self.proxy_image_list_model.rowCount() > 0):
-                self.image_list.list_view.setCurrentIndex(
-                    self.proxy_image_list_model.index(0, 0))
+            # The search results are loaded progressively, so the first
+            # result is selected once it arrives.
+            self.select_first_search_result_if_none_selected()
         else:
             # Normal full mode - use proxy filtering
             self.proxy_image_list_model.filter = filter_
@@ -480,6 +477,16 @@ class MainWindow(QMainWindow):
                         if self.proxy_image_list_model.filter is None
                         else 'filtered_image_index')
         self.settings.setValue(settings_key, proxy_image_index.row())
+
+    @Slot()
+    def select_first_search_result_if_none_selected(self):
+        if (self.image_list_model.load_mode != 'tags_only'
+                or not self.image_list.filter_line_edit.text()
+                or self.image_list.list_view.currentIndex().isValid()
+                or self.proxy_image_list_model.rowCount() == 0):
+            return
+        self.image_list.list_view.setCurrentIndex(
+            self.proxy_image_list_model.index(0, 0))
 
     @Slot()
     def handle_image_filter_text_changed(self):
@@ -533,6 +540,10 @@ class MainWindow(QMainWindow):
         self.proxy_image_list_model.rowsRemoved.connect(
             lambda: self.image_list.update_image_index_label(
                 self.image_list.list_view.currentIndex()))
+        # In tags-only mode, the search results are loaded progressively, so
+        # select the first image once it arrives if none is selected yet.
+        self.proxy_image_list_model.rowsInserted.connect(
+            self.select_first_search_result_if_none_selected)
         self.image_list.list_view.directory_reload_requested.connect(
             self.reload_directory)
         self.image_list.list_view.tags_paste_requested.connect(
