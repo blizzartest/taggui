@@ -42,10 +42,11 @@ Python 3.12 is recommended, but Python 3.11 should also work.
 Load the directory containing your images by clicking the `Load Directory`
 button in the center of the window (or `File` -> `Load Directory`).
 
-By default, tags are stored in a single tag database file, `tags.jsonl`, in
-the loaded directory (one JSON line per image, with paths relative to the
-directory).
-Any changes you make to the tags are automatically saved to this file.
+By default, tags are stored in tag database files, `tags.jsonl` (one JSON
+line per image): each folder gets its own `tags.jsonl` next to the images it
+contains, so every folder and subfolder can also be loaded as its own
+directory with its tags.
+Any changes you make to the tags are automatically saved to these files.
 If no tag database exists yet, TagGUI falls back to reading individual `.txt`
 files with the same names as the images.
 If you have existing `.txt` caption files, you can migrate them to the tag
