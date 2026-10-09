@@ -654,6 +654,25 @@ class MainWindow(QMainWindow):
         self.set_image_list_filter()
 
     @Slot(str)
+    def add_tag_to_image_list_filter_text(self, tag: str):
+        """
+        Add the tag to the image list filter text, keeping any filters that
+        are already there.
+        """
+        escaped_tag = (tag.replace('\\', '\\\\').replace('"', r'\"')
+                       .replace("'", r"\'"))
+        filter_line_edit = self.image_list.filter_line_edit
+        filter_text = filter_line_edit.text()
+        if filter_text:
+            filter_text += f' AND tag:"{escaped_tag}"'
+        else:
+            filter_text = f'tag:"{escaped_tag}"'
+        filter_line_edit.setText(filter_text)
+        # The filter is only applied on Enter in tags-only mode, so apply it
+        # immediately here.
+        self.set_image_list_filter()
+
+    @Slot(str)
     def add_tag_to_selected_images(self, tag: str):
         selected_image_indices = self.image_list.get_selected_image_indices()
         self.image_list_model.add_tags([tag], selected_image_indices)
@@ -668,6 +687,8 @@ class MainWindow(QMainWindow):
             self.image_list.filter_line_edit.clear)
         self.all_tags_editor.all_tags_list.image_list_filter_requested.connect(
             self.set_image_list_filter_text)
+        self.all_tags_editor.all_tags_list.image_list_filter_addition_requested.connect(
+            self.add_tag_to_image_list_filter_text)
         self.all_tags_editor.all_tags_list.tag_addition_requested.connect(
             self.add_tag_to_selected_images)
         self.all_tags_editor.all_tags_list.tags_deletion_requested.connect(

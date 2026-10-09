@@ -2,10 +2,10 @@ from enum import Enum
 
 from PySide6.QtCore import (QItemSelection, QItemSelectionModel, Qt, Signal,
                             Slot)
-from PySide6.QtGui import QKeyEvent, QMouseEvent
+from PySide6.QtGui import QGuiApplication, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (QAbstractItemView, QDockWidget, QHBoxLayout,
-                               QLabel, QLineEdit, QListView, QMessageBox,
-                               QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QListView, QMenu,
+                               QMessageBox, QVBoxLayout, QWidget)
 
 from models.proxy_tag_counter_model import ProxyTagCounterModel
 from models.tag_counter_model import TagCounterModel
@@ -31,6 +31,7 @@ class ClickAction(str, Enum):
 
 class AllTagsList(QListView):
     image_list_filter_requested = Signal(str)
+    image_list_filter_addition_requested = Signal(str)
     tag_addition_requested = Signal(str)
     tags_deletion_requested = Signal(list)
 
@@ -41,6 +42,9 @@ class AllTagsList(QListView):
         self.all_tags_editor = all_tags_editor
         self.setItemDelegate(TextEditItemDelegate(self))
         self.setWordWrap(True)
+        self.context_menu = QMenu(self)
+        self.context_menu.addAction('Add to Search', self.add_tag_to_search)
+        self.context_menu.addAction('Copy', self.copy_tag)
         # `selectionChanged` must be used and not `currentChanged` because
         # `currentChanged` is not emitted when the same tag is deselected and
         # selected again.
@@ -48,6 +52,10 @@ class AllTagsList(QListView):
             self.handle_selection_change)
 
     def mousePressEvent(self, event: QMouseEvent):
+        # Right-clicking only opens the context menu, so the selection (and
+        # with it the image list filter) is left unchanged.
+        if event.button() == Qt.MouseButton.RightButton:
+            return
         click_action = (self.all_tags_editor.click_action_combo_box
                         .currentText())
         if click_action == ClickAction.ADD_TO_SELECTED:
@@ -55,6 +63,25 @@ class AllTagsList(QListView):
             tag = index.data(Qt.ItemDataRole.EditRole)
             self.tag_addition_requested.emit(tag)
         super().mousePressEvent(event)
+
+    def get_clicked_tag(self, event: QMouseEvent) -> str | None:
+        index = self.indexAt(event.pos())
+        if not index.isValid():
+            return None
+        return index.data(Qt.ItemDataRole.EditRole)
+
+    def contextMenuEvent(self, event):
+        tag = self.get_clicked_tag(event)
+        if tag is None:
+            return
+        self.clicked_tag = tag
+        self.context_menu.exec_(event.globalPos())
+
+    def add_tag_to_search(self):
+        self.image_list_filter_addition_requested.emit(self.clicked_tag)
+
+    def copy_tag(self):
+        QGuiApplication.clipboard().setText(self.clicked_tag)
 
     def keyPressEvent(self, event: QKeyEvent):
         """
