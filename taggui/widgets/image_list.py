@@ -10,15 +10,15 @@ from PySide6.QtCore import (QFile, QItemSelection, QItemSelectionModel,
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDockWidget,
                                QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-                               QListView, QMenu, QMessageBox, QVBoxLayout,
-                               QWidget)
+                               QListView, QMenu, QMessageBox, QStyledItemDelegate,
+                               QVBoxLayout, QWidget)
 from pyparsing import (CaselessKeyword, CaselessLiteral, Group, OpAssoc,
                        ParseException, QuotedString, Suppress, Word,
                        infix_notation, nums, one_of, printables)
 
 from models.proxy_image_list_model import ProxyImageListModel
 from utils.image import Image
-from utils.settings import get_settings
+from utils.settings import DEFAULT_SETTINGS, get_settings
 from utils.settings_widgets import (SettingsBigCheckBox, SettingsComboBox)
 from utils.utils import get_confirmation_dialog_reply, pluralize
 
@@ -108,6 +108,27 @@ class SortMode(str, Enum):
     RANDOM = 'Random'
 
 
+class ViewMode(str, Enum):
+    LIST = 'List'
+    GRID = 'Grid'
+
+
+class ImageListItemDelegate(QStyledItemDelegate):
+    """In grid mode, do not show any text next to the thumbnail."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.grid_mode = False
+
+    def set_grid_mode(self, grid_mode: bool):
+        self.grid_mode = grid_mode
+
+    def displayText(self, value, locale) -> str:
+        if self.grid_mode:
+            return ''
+        return str(value)
+
+
 class ImageListView(QListView):
     tags_paste_requested = Signal(list, list)
     directory_reload_requested = Signal()
@@ -122,6 +143,10 @@ class ImageListView(QListView):
         # If the actual height of the image is greater than 3 times the width,
         # the image will be scaled down to fit.
         self.setIconSize(QSize(image_width, image_width * 3))
+        self.item_delegate = ImageListItemDelegate(self)
+        self.setItemDelegate(self.item_delegate)
+        self.image_width = image_width
+        self.set_view_mode(ViewMode.LIST)
 
         invert_selection_action = self.addAction('Invert Selection')
         invert_selection_action.setShortcut('Ctrl+I')
@@ -178,6 +203,40 @@ class ImageListView(QListView):
 
     def contextMenuEvent(self, event):
         self.context_menu.exec_(event.globalPos())
+
+    def wheelEvent(self, event):
+        if (self.viewMode() == QListView.ViewMode.IconMode
+                and event.angleDelta().y() != 0):
+            scroll_bar = self.verticalScrollBar()
+            rows_per_step = event.angleDelta().y() // 120
+            scroll_bar.setValue(scroll_bar.value()
+                                - rows_per_step * self.gridSize().height())
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def set_view_mode(self, view_mode: str):
+        if view_mode == ViewMode.GRID:
+            self.item_delegate.set_grid_mode(True)
+            self.setUniformItemSizes(True)
+            self.setWordWrap(False)
+            self.setIconSize(QSize(self.image_width, self.image_width))
+            self.setViewMode(QListView.ViewMode.IconMode)
+            self.setMovement(QListView.Movement.Static)
+            self.setResizeMode(QListView.ResizeMode.Adjust)
+            self.setSpacing(2)
+            self.setGridSize(QSize(self.image_width + 4,
+                                   self.image_width + 2))
+        else:
+            self.item_delegate.set_grid_mode(False)
+            self.setUniformItemSizes(False)
+            self.setWordWrap(True)
+            self.setIconSize(QSize(self.image_width, self.image_width * 3))
+            self.setViewMode(QListView.ViewMode.ListMode)
+            self.setMovement(QListView.Movement.Static)
+            self.setResizeMode(QListView.ResizeMode.Fixed)
+            self.setSpacing(0)
+            self.setGridSize(QSize())
 
     @Slot()
     def invert_selection(self):
@@ -365,6 +424,13 @@ class ImageList(QDockWidget):
         selection_mode_layout.addWidget(selection_mode_label)
         selection_mode_layout.addWidget(self.selection_mode_combo_box,
                                         stretch=1)
+        view_mode_label = QLabel('View mode')
+        self.view_mode_combo_box = SettingsComboBox(
+            key='image_list_view_mode',
+            default=DEFAULT_SETTINGS['image_list_view_mode'])
+        self.view_mode_combo_box.addItems(list(ViewMode))
+        selection_mode_layout.addWidget(view_mode_label)
+        selection_mode_layout.addWidget(self.view_mode_combo_box, stretch=1)
         self.list_view = ImageListView(self, proxy_image_list_model,
                                        tag_separator, image_width)
         self.image_index_label = QLabel()
@@ -380,6 +446,10 @@ class ImageList(QDockWidget):
         self.selection_mode_combo_box.currentTextChanged.connect(
             self.set_selection_mode)
         self.set_selection_mode(self.selection_mode_combo_box.currentText())
+        self.view_mode_combo_box.currentTextChanged.connect(
+            self.list_view.set_view_mode)
+        self.list_view.set_view_mode(
+            self.view_mode_combo_box.currentText())
 
         sort_mode_layout = QHBoxLayout()
         sort_mode_label = QLabel('Sort by')
