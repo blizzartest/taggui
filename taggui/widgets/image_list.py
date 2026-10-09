@@ -204,6 +204,17 @@ class ImageListView(QListView):
     def contextMenuEvent(self, event):
         self.context_menu.exec_(event.globalPos())
 
+    def wheelEvent(self, event):
+        if (self.viewMode() == QListView.ViewMode.IconMode
+                and event.angleDelta().y() != 0):
+            scroll_bar = self.verticalScrollBar()
+            rows_per_step = event.angleDelta().y() // 120
+            scroll_bar.setValue(scroll_bar.value()
+                                - rows_per_step * self.gridSize().height())
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
     def set_view_mode(self, view_mode: str):
         if view_mode == ViewMode.GRID:
             self.item_delegate.set_grid_mode(True)
