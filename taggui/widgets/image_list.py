@@ -19,7 +19,7 @@ from pyparsing import (CaselessKeyword, CaselessLiteral, Group, OpAssoc,
 from models.proxy_image_list_model import ProxyImageListModel
 from utils.image import Image
 from utils.settings import get_settings
-from utils.settings_widgets import SettingsComboBox
+from utils.settings_widgets import (SettingsBigCheckBox, SettingsComboBox)
 from utils.utils import get_confirmation_dialog_reply, pluralize
 
 
@@ -52,6 +52,7 @@ class FilterLineEdit(QLineEdit):
         string_filter_expressions = [Group(CaselessLiteral(key) + Suppress(':')
                                            + optionally_quoted_string)
                                      for key in string_filter_keys]
+        untagged_filter_expression = CaselessKeyword('untagged')
         comparison_operator = one_of('= == != < > <= >=')
         number_filter_keys = ['tags', 'chars', 'tokens']
         number_filter_expressions = [Group(CaselessLiteral(key) + Suppress(':')
@@ -61,6 +62,7 @@ class FilterLineEdit(QLineEdit):
         number_filter_expressions = reduce(or_, number_filter_expressions)
         filter_expressions = (string_filter_expressions
                               | number_filter_expressions
+                              | untagged_filter_expression
                               | optionally_quoted_string)
         self.filter_text_parser = infix_notation(
             filter_expressions,
@@ -94,6 +96,16 @@ class FilterLineEdit(QLineEdit):
 class SelectionMode(str, Enum):
     DEFAULT = 'Default'
     TOGGLE = 'Toggle'
+
+
+class SortMode(str, Enum):
+    NAME = 'Name'
+    DATE_CREATED = 'Date created'
+    DATE_MODIFIED = 'Date modified'
+    TAG_COUNT = 'Tag count'
+    DIMENSIONS = 'Dimensions'
+    ASPECT_RATIO = 'Aspect ratio'
+    RANDOM = 'Random'
 
 
 class ImageListView(QListView):
@@ -368,6 +380,28 @@ class ImageList(QDockWidget):
         self.selection_mode_combo_box.currentTextChanged.connect(
             self.set_selection_mode)
         self.set_selection_mode(self.selection_mode_combo_box.currentText())
+
+        sort_mode_layout = QHBoxLayout()
+        sort_mode_label = QLabel('Sort by')
+        self.sort_mode_combo_box = SettingsComboBox(
+            key='image_list_sort_mode', default=SortMode.NAME)
+        self.sort_mode_combo_box.addItems(list(SortMode))
+        self.reverse_sort_check_box = SettingsBigCheckBox(
+            key='image_list_reverse_sort', default=False, text='Reverse')
+        sort_mode_layout.addWidget(sort_mode_label)
+        sort_mode_layout.addWidget(self.sort_mode_combo_box, stretch=1)
+        sort_mode_layout.addWidget(self.reverse_sort_check_box)
+        layout.insertLayout(layout.indexOf(self.list_view), sort_mode_layout)
+        self.sort_mode_combo_box.currentTextChanged.connect(
+            self.proxy_image_list_model.set_sort_mode)
+        self.proxy_image_list_model.set_sort_mode(
+            self.sort_mode_combo_box.currentText())
+        self.reverse_sort_check_box.stateChanged.connect(
+            self.set_reverse_sort)
+        self.set_reverse_sort(self.reverse_sort_check_box.isChecked())
+
+    def set_reverse_sort(self, checked: bool):
+        self.proxy_image_list_model.set_reverse_sort(checked)
 
     def set_selection_mode(self, selection_mode: str):
         if selection_mode == SelectionMode.DEFAULT:

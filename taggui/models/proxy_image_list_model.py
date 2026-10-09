@@ -1,4 +1,5 @@
 import operator
+import random
 from fnmatch import fnmatchcase
 
 from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, Qt
@@ -16,10 +17,107 @@ class ProxyImageListModel(QSortFilterProxyModel):
         self.tokenizer = tokenizer
         self.tag_separator = tag_separator
         self.filter: list | None = None
+        self.sort_mode = 'Name'
+        self.reverse_sort = False
+        self.creation_times: dict[str, float] = {}
+        self.modification_times: dict[str, float] = {}
+        self.random_keys: dict[str, float] = {}
+
+    def set_sort_mode(self, sort_mode: str):
+        self.sort_mode = sort_mode
+        self.creation_times.clear()
+        self.modification_times.clear()
+        if sort_mode == 'Name':
+            # Restore the source model order (sorted by name) unless the sort
+            # is reversed, in which case `lessThan` handles the ordering.
+            if self.reverse_sort:
+                self.sort(0, Qt.SortOrder.AscendingOrder)
+            else:
+                self.sort(-1, Qt.SortOrder.AscendingOrder)
+        else:
+            self.sort(0, Qt.SortOrder.AscendingOrder)
+
+    def set_reverse_sort(self, reverse_sort: bool):
+        self.reverse_sort = reverse_sort
+        # Re-apply the current sort to reflect the new direction.
+        self.set_sort_mode(self.sort_mode)
+
+    def get_creation_time(self, image: Image) -> float:
+        path_string = str(image.path)
+        if path_string not in self.creation_times:
+            try:
+                stat = image.path.stat()
+                # Creation time is not available on all platforms, so fall
+                # back to the last modification time where it is missing.
+                self.creation_times[path_string] = getattr(
+                    stat, 'st_birthtime', stat.st_mtime)
+            except OSError:
+                self.creation_times[path_string] = 0
+        return self.creation_times[path_string]
+
+    def get_modification_time(self, image: Image) -> float:
+        path_string = str(image.path)
+        if path_string not in self.modification_times:
+            try:
+                self.modification_times[path_string] = image.path.stat().st_mtime
+            except OSError:
+                self.modification_times[path_string] = 0
+        return self.modification_times[path_string]
+
+    def get_random_key(self, image: Image) -> float:
+        """
+        Get a stable random key for an image so that the image order does not
+        change every time the view is re-sorted.
+        """
+        path_string = str(image.path)
+        if path_string not in self.random_keys:
+            self.random_keys[path_string] = random.random()
+        return self.random_keys[path_string]
+
+    def get_sort_key(self, image: Image):
+        # The path is used as a tiebreaker to keep the order stable.
+        if self.sort_mode == 'Date created':
+            return self.get_creation_time(image), image.path
+        if self.sort_mode == 'Date modified':
+            return self.get_modification_time(image), image.path
+        if self.sort_mode == 'Tag count':
+            return len(image.tags), image.path
+        if self.sort_mode == 'Dimensions':
+            # Sort by the total number of pixels (area), with images of
+            # unknown dimensions placed first.
+            if image.dimensions is None:
+                return -1, image.path
+            width, height = image.dimensions
+            return width * height, image.path
+        if self.sort_mode == 'Aspect ratio':
+            # Sort by the width-to-height ratio, from tall to wide, with
+            # images of unknown dimensions placed first.
+            if image.dimensions is None:
+                return -1.0, image.path
+            width, height = image.dimensions
+            return width / height, image.path
+        if self.sort_mode == 'Random':
+            return self.get_random_key(image), image.path
+        return image.path
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        if self.sort_mode == 'Name' and not self.reverse_sort:
+            return False
+        left_image: Image = left.data(Qt.ItemDataRole.UserRole)
+        right_image: Image = right.data(Qt.ItemDataRole.UserRole)
+        if left_image is None or right_image is None:
+            return False
+        left_key = self.get_sort_key(left_image)
+        right_key = self.get_sort_key(right_image)
+        if self.reverse_sort:
+            return right_key < left_key
+        return left_key < right_key
 
     def does_image_match_filter(self, image: Image,
                                 filter_: list | str) -> bool:
         if isinstance(filter_, str):
+            if filter_.lower() == 'untagged':
+                return not image.tags
             return (fnmatchcase(self.tag_separator.join(image.tags),
                                 f'*{filter_}*')
                     or fnmatchcase(str(image.path), f'*{filter_}*'))
