@@ -124,6 +124,11 @@ class AllTagsList(QListView):
         self.image_list_filter_requested.emit(selected_tag)
 
 
+class TagCountsDisplay(str, Enum):
+    COUNT = 'Count'
+    PERCENT = 'Percent of images'
+
+
 class AllTagsEditor(QDockWidget):
     def __init__(self, tag_counter_model: TagCounterModel):
         super().__init__()
@@ -158,6 +163,15 @@ class AllTagsEditor(QDockWidget):
         sort_layout.addWidget(sort_label)
         sort_layout.addWidget(self.sort_by_combo_box, stretch=1)
         sort_layout.addWidget(self.sort_order_combo_box, stretch=1)
+        counts_layout = QHBoxLayout()
+        counts_label = QLabel('Show tag counts as')
+        self.tag_counts_display_combo_box = SettingsComboBox(
+            key='all_tags_counts_display', default=TagCountsDisplay.COUNT)
+        self.tag_counts_display_combo_box.addItems(list(TagCountsDisplay))
+        self.tag_counts_display_combo_box.currentTextChanged.connect(
+            self.set_tag_counts_display)
+        counts_layout.addWidget(counts_label)
+        counts_layout.addWidget(self.tag_counts_display_combo_box, stretch=1)
         self.clear_filter_button = TallPushButton('Clear Image List Filter')
         self.clear_filter_button.setFixedHeight(
             int(self.clear_filter_button.sizeHint().height() * 1.5))
@@ -170,6 +184,7 @@ class AllTagsEditor(QDockWidget):
         layout.addWidget(self.filter_line_edit)
         layout.addLayout(click_action_layout)
         layout.addLayout(sort_layout)
+        layout.addLayout(counts_layout)
         layout.addWidget(self.clear_filter_button)
         layout.addWidget(self.all_tags_list)
         layout.addWidget(self.tag_count_label)
@@ -199,6 +214,11 @@ class AllTagsEditor(QDockWidget):
         # `invalidate()` must be called to force the proxy model to re-sort.
         self.proxy_tag_counter_model.invalidate()
         self.proxy_tag_counter_model.sort(0, sort_order)
+
+    @Slot(str)
+    def set_tag_counts_display(self, counts_display: str):
+        display_percentages = counts_display == TagCountsDisplay.PERCENT
+        self.tag_counter_model.set_display_percentages(display_percentages)
 
     @Slot(str)
     def set_filter(self, filter_):
