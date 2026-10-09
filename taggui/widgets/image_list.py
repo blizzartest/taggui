@@ -114,14 +114,25 @@ class ViewMode(str, Enum):
 
 
 class ImageListItemDelegate(QStyledItemDelegate):
-    """In grid mode, do not show any text next to the thumbnail."""
+    """In grid mode, do not show any text next to the thumbnail and give
+    every item the same square size so that thumbnails of images with
+    extreme aspect ratios are not cropped to the smallest item height."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.grid_mode = False
+        self.grid_item_size = QSize()
 
     def set_grid_mode(self, grid_mode: bool):
         self.grid_mode = grid_mode
+
+    def set_grid_item_size(self, size: QSize):
+        self.grid_item_size = size
+
+    def sizeHint(self, option, index) -> QSize:
+        if self.grid_mode:
+            return self.grid_item_size
+        return super().sizeHint(option, index)
 
     def displayText(self, value, locale) -> str:
         if self.grid_mode:
@@ -218,6 +229,8 @@ class ImageListView(QListView):
     def set_view_mode(self, view_mode: str):
         if view_mode == ViewMode.GRID:
             self.item_delegate.set_grid_mode(True)
+            self.item_delegate.set_grid_item_size(
+                QSize(self.image_width, self.image_width))
             self.setUniformItemSizes(True)
             self.setWordWrap(False)
             self.setIconSize(QSize(self.image_width, self.image_width))
