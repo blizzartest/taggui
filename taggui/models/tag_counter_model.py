@@ -88,6 +88,9 @@ class TagCounterModel(QAbstractListModel):
         top_left = self.index(0, 0)
         bottom_right = self.index(self.rowCount() - 1, 0)
         self.dataChanged.emit(top_left, bottom_right)
+
+    @Slot()
+    def count_indexed_tags(self, tag_index: dict):
         """Count tags from a tag index instead of loaded images."""
         self.tag_counter.clear()
         for tags in tag_index.values():
