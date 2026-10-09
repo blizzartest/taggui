@@ -103,6 +103,8 @@ class SortMode(str, Enum):
     DATE_CREATED = 'Date created'
     DATE_MODIFIED = 'Date modified'
     TAG_COUNT = 'Tag count'
+    DIMENSIONS = 'Dimensions'
+    ASPECT_RATIO = 'Aspect ratio'
     RANDOM = 'Random'
 
 

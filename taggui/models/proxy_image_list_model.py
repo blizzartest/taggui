@@ -82,6 +82,20 @@ class ProxyImageListModel(QSortFilterProxyModel):
             return self.get_modification_time(image), image.path
         if self.sort_mode == 'Tag count':
             return len(image.tags), image.path
+        if self.sort_mode == 'Dimensions':
+            # Sort by the total number of pixels (area), with images of
+            # unknown dimensions placed first.
+            if image.dimensions is None:
+                return -1, image.path
+            width, height = image.dimensions
+            return width * height, image.path
+        if self.sort_mode == 'Aspect ratio':
+            # Sort by the width-to-height ratio, from tall to wide, with
+            # images of unknown dimensions placed first.
+            if image.dimensions is None:
+                return -1.0, image.path
+            width, height = image.dimensions
+            return width / height, image.path
         if self.sort_mode == 'Random':
             return self.get_random_key(image), image.path
         return image.path
