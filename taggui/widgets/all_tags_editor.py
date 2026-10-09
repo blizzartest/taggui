@@ -48,8 +48,14 @@ class AllTagsList(QListView):
         # `selectionChanged` must be used and not `currentChanged` because
         # `currentChanged` is not emitted when the same tag is deselected and
         # selected again.
+        self.selected_tags = []
+        self.restoring_selection = False
         self.selectionModel().selectionChanged.connect(
             self.handle_selection_change)
+        # In tags-only mode, selecting a tag loads the matching images,
+        # which triggers a tag recount; the resulting model reset would
+        # otherwise clear the selection.
+        self.model().modelReset.connect(self.restore_selection)
 
     def mousePressEvent(self, event: QMouseEvent):
         # Right-clicking only opens the context menu, so the selection (and
@@ -114,6 +120,10 @@ class AllTagsList(QListView):
             self.tags_deletion_requested.emit(tags)
 
     def handle_selection_change(self, selected: QItemSelection, _):
+        self.selected_tags = [index.data(Qt.ItemDataRole.EditRole)
+                              for index in self.selectedIndexes()]
+        if self.restoring_selection:
+            return
         click_action = (self.all_tags_editor.click_action_combo_box
                         .currentText())
         if click_action != ClickAction.FILTER_IMAGES:
@@ -122,6 +132,31 @@ class AllTagsList(QListView):
             return
         selected_tag = selected.indexes()[0].data(Qt.ItemDataRole.EditRole)
         self.image_list_filter_requested.emit(selected_tag)
+
+    @Slot()
+    def restore_selection(self):
+        """Re-select the previously selected tags after the model resets."""
+        if not self.selected_tags:
+            return
+        proxy_model = self.model()
+        tag_to_index = {}
+        for row in range(proxy_model.rowCount()):
+            index = proxy_model.index(row, 0)
+            tag_to_index[index.data(Qt.ItemDataRole.EditRole)] = index
+        indices = [tag_to_index[tag] for tag in self.selected_tags
+                   if tag in tag_to_index]
+        if not indices:
+            return
+        selection = QItemSelection()
+        for index in indices:
+            selection.select(index, index)
+        selection_model = self.selectionModel()
+        self.restoring_selection = True
+        selection_model.select(
+            selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        selection_model.setCurrentIndex(
+            indices[0], QItemSelectionModel.SelectionFlag.NoUpdate)
+        self.restoring_selection = False
 
 
 class TagCountsDisplay(str, Enum):
