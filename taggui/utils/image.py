@@ -10,4 +10,3 @@ class Image:
     dimensions: tuple[int, int] | None
     tags: list[str] = field(default_factory=list)
     thumbnail: QIcon | None = None
-    is_fully_loaded: bool = False

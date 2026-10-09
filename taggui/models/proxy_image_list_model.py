@@ -1,6 +1,8 @@
 import operator
 import random
-from fnmatch import fnmatchcase
+import re
+from fnmatch import translate
+from functools import lru_cache
 
 import imagesize
 
@@ -9,6 +11,13 @@ from transformers import PreTrainedTokenizerBase
 
 from models.image_list_model import ImageListModel
 from utils.image import Image
+
+
+@lru_cache(maxsize=1024)
+def get_filter_matcher(pattern: str):
+    """Compile a glob pattern once so that it can be reused for every image
+    while a filter is active."""
+    return re.compile(translate(pattern)).match
 
 
 class ProxyImageListModel(QSortFilterProxyModel):
@@ -25,6 +34,8 @@ class ProxyImageListModel(QSortFilterProxyModel):
         self.modification_times: dict[str, float] = {}
         self.random_keys: dict[str, float] = {}
         self.dimensions: dict[str, tuple[int, int] | None] = {}
+        self.caption_cache: dict[int, tuple] = {}
+        self.token_count_cache: dict[int, tuple] = {}
 
     def set_sort_mode(self, sort_mode: str):
         self.sort_mode = sort_mode
@@ -144,28 +155,60 @@ class ProxyImageListModel(QSortFilterProxyModel):
             return right_key < left_key
         return left_key < right_key
 
+    def get_image_caption(self, image: Image) -> str:
+        """Get the caption of an image, caching the result so that repeated
+        filter evaluations do not rejoin the tags for every image. The image
+        object is stored with the caption so that a recycled id of a garbage
+        collected image is never mistaken for a cache hit."""
+        image_id = id(image)
+        cached = self.caption_cache.get(image_id)
+        if cached is not None and cached[0] is image:
+            return cached[1]
+        caption = self.tag_separator.join(image.tags)
+        self.caption_cache[image_id] = (image, caption)
+        return caption
+
+    def get_image_token_count(self, image: Image) -> int:
+        """Get the token count of an image's caption, caching the result."""
+        image_id = id(image)
+        cached = self.token_count_cache.get(image_id)
+        if cached is not None and cached[0] is image:
+            return cached[1]
+        caption = self.get_image_caption(image)
+        # Subtract 2 for the start-of-text and end-of-text tokens.
+        token_count = len(self.tokenizer(caption).input_ids) - 2
+        self.token_count_cache[image_id] = (image, token_count)
+        return token_count
+
+    def clear_image_caches(self):
+        self.caption_cache.clear()
+        self.token_count_cache.clear()
+
     def does_image_match_filter(self, image: Image,
                                 filter_: list | str) -> bool:
         if isinstance(filter_, str):
             if filter_.lower() == 'untagged':
                 return not image.tags
-            return (fnmatchcase(self.tag_separator.join(image.tags),
-                                f'*{filter_}*')
-                    or fnmatchcase(str(image.path), f'*{filter_}*'))
+            caption_matcher = get_filter_matcher(f'*{filter_}*')
+            return (caption_matcher(self.get_image_caption(image))
+                    or caption_matcher(str(image.path)))
         if len(filter_) == 1:
             return self.does_image_match_filter(image, filter_[0])
         if len(filter_) == 2:
             if filter_[0] == 'NOT':
                 return not self.does_image_match_filter(image, filter_[1])
             if filter_[0] == 'tag':
-                return any(fnmatchcase(tag, filter_[1]) for tag in image.tags)
+                tag_matcher = get_filter_matcher(filter_[1])
+                return any(tag_matcher(tag) for tag in image.tags)
             if filter_[0] == 'caption':
-                caption = self.tag_separator.join(image.tags)
-                return fnmatchcase(caption, f'*{filter_[1]}*')
+                caption_matcher = get_filter_matcher(f'*{filter_[1]}*')
+                return caption_matcher(self.get_image_caption(image))
             if filter_[0] == 'name':
-                return fnmatchcase(image.path.name, f'*{filter_[1]}*')
+                name_matcher = get_filter_matcher(f'*{filter_[1]}*')
+                return name_matcher(image.path.name)
             if filter_[0] == 'path':
-                return fnmatchcase(str(image.path), f'*{filter_[1]}*')
+                path_matcher = get_filter_matcher(f'*{filter_[1]}*')
+                return path_matcher(str(image.path))
         if filter_[1] == 'AND':
             return (self.does_image_match_filter(image, filter_[0])
                     and self.does_image_match_filter(image, filter_[2:]))
@@ -186,12 +229,9 @@ class ProxyImageListModel(QSortFilterProxyModel):
         if filter_[0] == 'tags':
             number_to_compare = len(image.tags)
         elif filter_[0] == 'chars':
-            caption = self.tag_separator.join(image.tags)
-            number_to_compare = len(caption)
+            number_to_compare = len(self.get_image_caption(image))
         elif filter_[0] == 'tokens':
-            caption = self.tag_separator.join(image.tags)
-            # Subtract 2 for the `<|startoftext|>` and `<|endoftext|>` tokens.
-            number_to_compare = len(self.tokenizer(caption).input_ids) - 2
+            number_to_compare = self.get_image_token_count(image)
         return comparison_operator(number_to_compare, int(filter_[2]))
 
     def filterAcceptsRow(self, source_row: int,

@@ -4,7 +4,7 @@ import sys
 import threading
 import queue
 from collections import Counter, deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -29,6 +29,35 @@ SEARCH_RESULT_BATCH_SIZE = 5
 THUMBNAIL_WORKER_COUNT = 4
 THUMBNAIL_QUEUE_CAPACITY = 192
 THUMBNAIL_FLUSH_INTERVAL_MS = 180
+# File formats for which reading EXIF metadata cannot yield an orientation.
+# TIFF supports EXIF and PNG/WebP can carry EXIF, so those are still read.
+EXIF_SUFFIXES = {'.jpg', '.jpeg', '.tif', '.tiff', '.webp', '.png', '.heic',
+                 '.heif', '.avif'}
+
+
+def get_directory_file_paths(directory_path: Path,
+                             image_suffixes: set[str],
+                             text_file_paths: set[Path] | None = None) \
+        -> tuple[set[Path], set[Path]]:
+    """
+    Recursively get all image and .txt file paths in a directory, including
+    those in subdirectories, in a single traversal.
+    """
+    image_paths: set[Path] = set()
+    if text_file_paths is None:
+        text_file_paths = set()
+    for path in directory_path.iterdir():
+        if path.is_file():
+            suffix = path.suffix.lower()
+            if suffix in image_suffixes:
+                image_paths.add(path)
+            elif suffix == '.txt':
+                text_file_paths.add(path)
+        elif path.is_dir():
+            sub_image_paths, sub_text_file_paths = get_directory_file_paths(
+                path, image_suffixes, text_file_paths)
+            image_paths.update(sub_image_paths)
+    return image_paths, text_file_paths
 
 
 def get_image_paths(directory_path: Path, image_suffixes: set[str]) -> set[Path]:
@@ -36,36 +65,16 @@ def get_image_paths(directory_path: Path, image_suffixes: set[str]) -> set[Path]
     Recursively get all image file paths in a directory, including those in
     subdirectories. Filters for image files directly during traversal.
     """
-    image_paths = set()
-    for path in directory_path.iterdir():
-        if path.is_file() and path.suffix.lower() in image_suffixes:
-            image_paths.add(path)
-        elif path.is_dir():
-            image_paths.update(get_image_paths(path, image_suffixes))
-    return image_paths
+    return get_directory_file_paths(directory_path, image_suffixes)[0]
 
 
-def get_text_file_paths(directory_path: Path, tags_subfolder: str = '') -> set[Path]:
+def get_text_file_paths(directory_path: Path, tags_subfolder: str = '') \
+        -> set[Path]:
     """
     Recursively get all .txt file paths in a directory, including those in
     subdirectories. Also checks the tags subfolder if specified.
     """
-    text_paths = set()
-    for path in directory_path.iterdir():
-        if path.is_file() and path.suffix == '.txt':
-            text_paths.add(path)
-        elif path.is_dir():
-            text_paths.update(get_text_file_paths(path, tags_subfolder))
-    # Also check the tags subfolder for .txt files
-    if tags_subfolder:
-        tags_dir = directory_path / tags_subfolder
-        if tags_dir.exists():
-            for path in tags_dir.iterdir():
-                if path.is_file() and path.suffix == '.txt':
-                    text_paths.add(path)
-                elif path.is_dir():
-                    text_paths.update(get_text_file_paths(path, tags_subfolder))
-    return text_paths
+    return get_directory_file_paths(directory_path, set())[1]
 
 
 def load_image_metadata(image_path: Path, tag_separator: str,
@@ -81,21 +90,23 @@ def load_image_metadata(image_path: Path, tag_separator: str,
     try:
         # Single-pass: get dimensions first
         dimensions = imagesize.get(image_path)
-        
-        # Check EXIF orientation and rotate dimensions if necessary
-        # Use the file path directly - exifread handles opening efficiently
-        try:
-            with open(image_path, 'rb') as image_file:
-                exif_tags = exifread.process_file(
-                    image_file, details=False,
-                    stop_tag='Image Orientation')
-                if 'Image Orientation' in exif_tags:
-                    orientations = exif_tags['Image Orientation'].values
-                    if any(value in orientations for value in (5, 6, 7, 8)):
-                        dimensions = (dimensions[1], dimensions[0])
-        except Exception as exception:
-            print(f'Failed to get Exif tags for {image_path}: '
-                  f'{exception}', file=sys.stderr)
+
+        # Check EXIF orientation and rotate dimensions if necessary.
+        # Formats that cannot carry EXIF metadata are skipped, and
+        # `extract_thumbnail=False` avoids reading thumbnail bytes.
+        if image_path.suffix.lower() in EXIF_SUFFIXES:
+            try:
+                with open(image_path, 'rb') as image_file:
+                    exif_tags = exifread.process_file(
+                        image_file, details=False, extract_thumbnail=False,
+                        stop_tag='Image Orientation')
+                    if 'Image Orientation' in exif_tags:
+                        orientations = exif_tags['Image Orientation'].values
+                        if any(value in orientations for value in (5, 6, 7, 8)):
+                            dimensions = (dimensions[1], dimensions[0])
+            except Exception as exception:
+                print(f'Failed to get Exif tags for {image_path}: '
+                      f'{exception}', file=sys.stderr)
     except (ValueError, OSError) as exception:
         print(f'Failed to get dimensions for {image_path}: '
               f'{exception}', file=sys.stderr)
@@ -197,6 +208,7 @@ class ImageListModel(QAbstractListModel):
         self.load_mode = 'full'
         self.directory_path = None
         self.image_suffixes = set()
+        self.tags_subfolder = DEFAULT_SETTINGS['tags_subfolder']
         self.tags_storage_mode = get_tags_storage_mode()
         self.database_dirty = False
         self.database_save_timer = QTimer(self)
@@ -236,27 +248,16 @@ class ImageListModel(QAbstractListModel):
             return text
         if role == Qt.ItemDataRole.DecorationRole:
             # The thumbnail. If the image already has a thumbnail stored, use
-            # it. Otherwise, generate a thumbnail and save it to the image.
+            # it. Otherwise, generate a thumbnail in the background so that
+            # loading a large directory does not block the interface; visible
+            # images are prioritized over the preloading of the rest of the
+            # folder.
             if image.thumbnail:
                 return image.thumbnail
-            if not image.is_fully_loaded:
-                # In tags-only mode, generate the thumbnail in the
-                # background so that the list stays responsive. Visible
-                # images are prioritized over the preloading of the rest of
-                # the folder.
-                self.submit_thumbnail_task(image, row, to_front=True)
-                if not self.flush_timer.isActive():
-                    self.flush_timer.start()
-                return None
-            image_reader = QImageReader(str(image.path))
-            # Rotate the image based on the orientation tag.
-            image_reader.setAutoTransform(True)
-            pixmap = QPixmap.fromImageReader(image_reader).scaledToWidth(
-                self.image_list_image_width,
-                Qt.TransformationMode.SmoothTransformation)
-            thumbnail = QIcon(pixmap)
-            image.thumbnail = thumbnail
-            return thumbnail
+            self.submit_thumbnail_task(image, row, to_front=True)
+            if not self.flush_timer.isActive():
+                self.flush_timer.start()
+            return None
         if role == Qt.ItemDataRole.SizeHintRole:
             if image.thumbnail:
                 return image.thumbnail.availableSizes()[0]
@@ -352,14 +353,18 @@ class ImageListModel(QAbstractListModel):
                 self.failed_thumbnail_paths.add(image.path)
                 continue
             image.thumbnail = QIcon(QPixmap.fromImage(thumbnail))
-            image.is_fully_loaded = True
             if first_row is None or row < first_row:
                 first_row = row
             if last_row is None or row > last_row:
                 last_row = row
         if first_row is not None:
+            # Only the thumbnails changed, so only views that show decorations
+            # need to be updated. This avoids triggering tag recounts and other
+            # caption-related work for every thumbnail flush.
             self.dataChanged.emit(self.index(first_row),
-                                  self.index(last_row))
+                                  self.index(last_row),
+                                  [Qt.ItemDataRole.DecorationRole,
+                                   Qt.ItemDataRole.SizeHintRole])
         if (self.completed_thumbnails.empty()
                 and self.thumbnail_task_queue.empty()
                 and not self.pending_thumbnail_rows):
@@ -378,7 +383,7 @@ class ImageListModel(QAbstractListModel):
         self.redo_stack.clear()
         self.update_undo_and_redo_actions_requested.emit()
         self.directory_path = directory_path
-        
+
         settings = get_settings()
         image_suffixes_string = settings.value(
             'image_list_file_formats',
@@ -389,86 +394,91 @@ class ImageListModel(QAbstractListModel):
             if not suffix.startswith('.'):
                 suffix = '.' + suffix
             image_suffixes.add(suffix)
-        
+
         tags_subfolder = settings.value(
             'tags_subfolder',
             defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
         self.image_suffixes = image_suffixes
-        
+        self.tags_subfolder = tags_subfolder
+
         self.tags_storage_mode = get_tags_storage_mode()
-        
-        # Always build tag index
-        self.build_tag_index(directory_path, image_suffixes, tags_subfolder)
-        
+
+        # Scan the directory tree once and reuse the results for the tag
+        # index and the image list.
+        image_paths, text_file_paths = get_directory_file_paths(
+            directory_path, image_suffixes)
+        self.build_tag_index(directory_path, image_suffixes, tags_subfolder,
+                             image_paths, text_file_paths)
+
         if self.load_mode == 'full':
-            # Load all images with full data (existing behavior)
-            image_paths = get_image_paths(directory_path, image_suffixes)
             if self.tags_storage_mode == 'single_file':
                 # Tags come from the tag index (which is backed by the tag
                 # database), so no per-image caption files need to be read.
                 text_file_path_strings = set()
             else:
-                text_file_paths = get_text_file_paths(
-                    directory_path, tags_subfolder)
                 text_file_path_strings = {str(path)
                                           for path in text_file_paths}
-            
-            # Use ThreadPoolExecutor for parallel loading
-            num_workers = min(4, len(image_paths)) if image_paths else 1
-            
-            loaded_images = []
+
+            # Load the image metadata in parallel.
+            sorted_image_paths = sorted(image_paths)
+            num_workers = min(4, len(sorted_image_paths)) or 1
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                # Submit all image loading tasks
-                future_to_path = {
-                    executor.submit(load_image_metadata, image_path, self.tag_separator,
-                                   text_file_path_strings, tags_subfolder): image_path
-                    for image_path in sorted(image_paths)
-                }
-                
-                # Collect results as they complete
-                for future in as_completed(future_to_path):
-                    image_path, dimensions, tags = future.result()
+                futures = [
+                    executor.submit(load_image_metadata, image_path,
+                                    self.tag_separator,
+                                    text_file_path_strings, tags_subfolder)
+                    for image_path in sorted_image_paths]
+                loaded_images = []
+                for future, image_path in zip(futures, sorted_image_paths):
+                    _, dimensions, tags = future.result()
                     if self.tags_storage_mode == 'single_file':
                         tags = self.tag_index.get(image_path, [])
-                    image = Image(image_path, dimensions, tags, None, True)
-                    loaded_images.append(image)
-            
-            # Sort by path (already sorted from input, but ensure consistency)
-            loaded_images.sort(key=lambda image_: image_.path)
-            
+                    loaded_images.append(
+                        Image(image_path, dimensions, tags, None))
+
             self.images = loaded_images
-        
+
         self.endResetModel()
 
     def build_tag_index(self, directory_path: Path, image_suffixes: set[str],
-                        tags_subfolder: str):
+                        tags_subfolder: str,
+                        image_paths: set[Path] | None = None,
+                        text_file_paths: set[Path] | None = None):
         """Build an index of image paths to their tags.
 
         In single-file mode the index is loaded from the tag database
         (tags.jsonl); .txt files are only used as a fallback when no
-        database exists yet.
+        database exists yet. Precomputed path sets from a single directory
+        traversal can be passed in to avoid re-scanning.
         """
-        image_paths = get_image_paths(directory_path, image_suffixes)
-        
+        if image_paths is None:
+            image_paths = get_image_paths(directory_path, image_suffixes)
+
         if self.tags_storage_mode == 'single_file':
             self.tag_index = load_tags_from_database(
                 directory_path, self.tag_separator)
             if self.tag_index:
                 return
-        
+
         self._build_tag_index_from_txt_files(directory_path, image_suffixes,
-                                              tags_subfolder)
+                                              tags_subfolder,
+                                              image_paths, text_file_paths)
 
     def _build_tag_index_from_txt_files(self, directory_path: Path,
                                          image_suffixes: set[str],
-                                         tags_subfolder: str):
+                                         tags_subfolder: str,
+                                         image_paths: set[Path] | None = None,
+                                         text_file_paths: set[Path] | None = None):
         """Build the tag index from individual .txt caption files."""
-        text_file_paths = get_text_file_paths(directory_path, tags_subfolder)
-        image_paths = get_image_paths(directory_path, image_suffixes)
+        if text_file_paths is None:
+            text_file_paths = get_text_file_paths(directory_path,
+                                                  tags_subfolder)
+        if image_paths is None:
+            image_paths = get_image_paths(directory_path, image_suffixes)
 
         # Build a set of all valid image paths for quick lookup
         valid_image_paths = {str(p) for p in image_paths}
-        
+
         def load_tags_from_text_file(text_path: Path):
             image_path = txt_to_image_path(text_path, tags_subfolder,
                                            image_suffixes)
@@ -549,8 +559,7 @@ class ImageListModel(QAbstractListModel):
             for image_path, tags in matching_images:
                 if generation != self.load_generation:
                     return
-                batch.append(Image(image_path, None, tags.copy(), None,
-                                  False))
+                batch.append(Image(image_path, None, tags.copy(), None))
                 if len(batch) >= SEARCH_RESULT_BATCH_SIZE:
                     self.search_batch_loaded.emit(batch, generation)
                     batch = []
@@ -594,24 +603,20 @@ class ImageListModel(QAbstractListModel):
         self.update_undo_and_redo_actions_requested.emit()
 
     def write_image_tags_to_disk(self, image: Image):
-        settings = get_settings()
-        tags_subfolder = settings.value(
-            'tags_subfolder',
-            defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
-        
         # Keep the tag index up to date so that subsequent searches and
         # the All Tags list reflect the edited tags.
         self.tag_index[image.path] = image.tags.copy()
-        
-        if get_tags_storage_mode() == 'single_file':
+
+        if self.tags_storage_mode == 'single_file':
             # The tag database is rewritten as a whole; batch frequent tag
             # edits with a debounce so that the file is not rewritten for
             # every single edit.
             self.database_dirty = True
             self.database_save_timer.start()
             return
-        
+
         # Determine where to write the tags file
+        tags_subfolder = self.tags_subfolder
         if tags_subfolder:
             tags_dir = image.path.parent / tags_subfolder
             # Create the subfolder if it doesn't exist
@@ -643,6 +648,7 @@ class ImageListModel(QAbstractListModel):
         tags_subfolder = settings.value(
             'tags_subfolder',
             defaultValue=DEFAULT_SETTINGS['tags_subfolder'], type=str)
+        self.tags_subfolder = tags_subfolder
         self._build_tag_index_from_txt_files(self.directory_path,
                                               self.image_suffixes,
                                               tags_subfolder)

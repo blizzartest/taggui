@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from PySide6.QtCore import QKeyCombination, QModelIndex, QUrl, Qt, Slot
+from PySide6.QtCore import (QKeyCombination, QModelIndex, QTimer, QUrl, Qt,
+                            Slot)
 from PySide6.QtGui import (QAction, QCloseEvent, QDesktopServices, QIcon,
                            QKeySequence, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QApplication, QFileDialog, QMainWindow,
@@ -58,6 +59,13 @@ class MainWindow(QMainWindow):
         self.image_list_model.proxy_image_list_model = (
             self.proxy_image_list_model)
         self.tag_counter_model = TagCounterModel()
+        # Counting tags over all images is expensive, so it is debounced to
+        # coalesce bursts of data changes (e.g. batch tag operations) into
+        # a single recount.
+        self.tag_counter_update_timer = QTimer(self)
+        self.tag_counter_update_timer.setSingleShot(True)
+        self.tag_counter_update_timer.setInterval(100)
+        self.tag_counter_update_timer.timeout.connect(self.update_tag_counter)
         self.image_tag_list_model = ImageTagListModel()
 
         self.setWindowIcon(QIcon(QPixmap(get_resource_path(ICON_PATH))))
@@ -569,7 +577,10 @@ class MainWindow(QMainWindow):
         self.image_list_selection_model.currentChanged.connect(
             self.image_tags_editor.load_image_tags)
         self.image_list_model.modelReset.connect(self.update_tag_counter)
-        self.image_list_model.dataChanged.connect(self.update_tag_counter)
+        self.image_list_model.modelReset.connect(
+            self.proxy_image_list_model.clear_image_caches)
+        self.image_list_model.dataChanged.connect(
+            self.handle_image_data_changed)
         self.image_list_model.dataChanged.connect(
             self.image_tags_editor.reload_image_tags_if_changed)
         self.image_list_model.update_undo_and_redo_actions_requested.connect(
@@ -595,6 +606,30 @@ class MainWindow(QMainWindow):
         self.image_list.visibilityChanged.connect(
             lambda: self.toggle_image_list_action.setChecked(
                 self.image_list.isVisible()))
+
+    def handle_image_data_changed(self, first_index: QModelIndex,
+                                  last_index: QModelIndex,
+                                  roles: list | None = None):
+        """
+        React to image data changes: clear the proxy model's cached captions
+        when the tags changed, and debounce a tag recount. Thumbnail-only
+        updates (decoration role) do not affect tags and are skipped.
+        """
+        if roles is None:
+            tag_roles_changed = True
+        else:
+            # The roles may be emitted as enum objects or as plain integers.
+            tag_roles = (int(Qt.ItemDataRole.DisplayRole),
+                         int(Qt.ItemDataRole.UserRole))
+            tag_roles_changed = any(int(role) in tag_roles for role in roles)
+        if tag_roles_changed:
+            self.proxy_image_list_model.clear_image_caches()
+            # Only start the timer if it is not already active, so that a
+            # stream of changes (e.g. one per generated caption) still
+            # results in regular live recounts instead of the timer being
+            # restarted until the stream ends.
+            if not self.tag_counter_update_timer.isActive():
+                self.tag_counter_update_timer.start()
 
     @Slot()
     def update_image_tags(self):
