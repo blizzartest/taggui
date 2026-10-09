@@ -624,7 +624,12 @@ class MainWindow(QMainWindow):
             tag_roles_changed = any(int(role) in tag_roles for role in roles)
         if tag_roles_changed:
             self.proxy_image_list_model.clear_image_caches()
-            self.tag_counter_update_timer.start()
+            # Only start the timer if it is not already active, so that a
+            # stream of changes (e.g. one per generated caption) still
+            # results in regular live recounts instead of the timer being
+            # restarted until the stream ends.
+            if not self.tag_counter_update_timer.isActive():
+                self.tag_counter_update_timer.start()
 
     @Slot()
     def update_image_tags(self):
