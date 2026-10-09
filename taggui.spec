@@ -1,10 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
 datas = [('clip-vit-base-patch32', 'clip-vit-base-patch32'),
          ('images/icon.ico', 'images')]
 hiddenimports = [
     'timm.models.layers',
 ]
+# The compiled libraries that register the torchvision custom operators
+# (e.g. torchvision::nms) are loaded dynamically, so PyInstaller's binary
+# dependency analysis can miss them.
+binaries = (collect_dynamic_libs('torch')
+            + collect_dynamic_libs('torchvision'))
 
 block_cipher = None
 
@@ -12,7 +19,7 @@ block_cipher = None
 a = Analysis(
     ['taggui/run_gui.py'],
     pathex=['taggui'],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -35,7 +42,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX compression corrupts the torch/torchvision extension libraries
+    # (their operator registration then fails at runtime with e.g.
+    # "operator torchvision::nms does not exist").
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -51,7 +61,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='taggui',
 )
