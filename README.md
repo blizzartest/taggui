@@ -274,6 +274,8 @@ You can nest parentheses and operators to create arbitrarily complex filters.
 - Delete all instances of a tag: Select the tag and press `Delete`
 - Rename all instances of a tag: Double-click the tag, or select the tag and
   press `F2`
+- Right-click a tag to open a context menu with `Filter Images for Tag` and
+  `Copy Tag`
 
 The `Edit` menu contains additional features for batch tag operations, such as
 `Find and Replace` (`Ctrl`+`R`) and `Batch Reorder Tags` (`Ctrl`+`B`).
