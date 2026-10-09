@@ -15,6 +15,8 @@ class TagCounterModel(QAbstractListModel):
         self.tag_counter = Counter()
         self.most_common_tags = []
         self.all_tags_list = None
+        self.image_count = 0
+        self.display_percentages = False
 
     def rowCount(self, parent=None) -> int:
         return len(self.most_common_tags)
@@ -24,6 +26,9 @@ class TagCounterModel(QAbstractListModel):
         if role == Qt.ItemDataRole.UserRole:
             return tag, count
         if role == Qt.ItemDataRole.DisplayRole:
+            if (self.display_percentages and self.image_count > 0):
+                percentage = 100 * count / self.image_count
+                return f'{tag} ({percentage:.0f}%)'
             return f'{tag} ({count})'
         if role == Qt.ItemDataRole.EditRole:
             return tag
@@ -71,14 +76,22 @@ class TagCounterModel(QAbstractListModel):
         self.tag_counter.clear()
         for image in images:
             self.tag_counter.update(image.tags)
+        self.image_count = len(images)
         self.most_common_tags = self.tag_counter.most_common()
         self.modelReset.emit()
 
-    @Slot()
-    def count_indexed_tags(self, tag_index: dict):
+    @Slot(bool)
+    def set_display_percentages(self, display_percentages: bool):
+        if display_percentages == self.display_percentages:
+            return
+        self.display_percentages = display_percentages
+        top_left = self.index(0, 0)
+        bottom_right = self.index(self.rowCount() - 1, 0)
+        self.dataChanged.emit(top_left, bottom_right)
         """Count tags from a tag index instead of loaded images."""
         self.tag_counter.clear()
         for tags in tag_index.values():
             self.tag_counter.update(tags)
+        self.image_count = len(tag_index)
         self.most_common_tags = self.tag_counter.most_common()
         self.modelReset.emit()
