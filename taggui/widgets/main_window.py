@@ -615,7 +615,9 @@ class MainWindow(QMainWindow):
         when the tags changed, and debounce a tag recount. Thumbnail-only
         updates (decoration role) do not affect tags and are skipped.
         """
-        if roles is None:
+        if not roles:
+            # `dataChanged` emitted without roles means all roles may have
+            # changed; PySide6 passes an empty list rather than None.
             tag_roles_changed = True
         else:
             # The roles may be emitted as enum objects or as plain integers.
