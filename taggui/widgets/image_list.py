@@ -19,7 +19,7 @@ from pyparsing import (CaselessKeyword, CaselessLiteral, Group, OpAssoc,
 from models.proxy_image_list_model import ProxyImageListModel
 from utils.image import Image
 from utils.settings import get_settings
-from utils.settings_widgets import SettingsComboBox
+from utils.settings_widgets import (SettingsBigCheckBox, SettingsComboBox)
 from utils.utils import get_confirmation_dialog_reply, pluralize
 
 
@@ -101,6 +101,9 @@ class SelectionMode(str, Enum):
 class SortMode(str, Enum):
     NAME = 'Name'
     DATE_CREATED = 'Date created'
+    DATE_MODIFIED = 'Date modified'
+    TAG_COUNT = 'Tag count'
+    RANDOM = 'Random'
 
 
 class ImageListView(QListView):
@@ -381,13 +384,22 @@ class ImageList(QDockWidget):
         self.sort_mode_combo_box = SettingsComboBox(
             key='image_list_sort_mode', default=SortMode.NAME)
         self.sort_mode_combo_box.addItems(list(SortMode))
+        self.reverse_sort_check_box = SettingsBigCheckBox(
+            key='image_list_reverse_sort', default=False, text='Reverse')
         sort_mode_layout.addWidget(sort_mode_label)
         sort_mode_layout.addWidget(self.sort_mode_combo_box, stretch=1)
+        sort_mode_layout.addWidget(self.reverse_sort_check_box)
         layout.insertLayout(layout.indexOf(self.list_view), sort_mode_layout)
         self.sort_mode_combo_box.currentTextChanged.connect(
             self.proxy_image_list_model.set_sort_mode)
         self.proxy_image_list_model.set_sort_mode(
             self.sort_mode_combo_box.currentText())
+        self.reverse_sort_check_box.stateChanged.connect(
+            self.set_reverse_sort)
+        self.set_reverse_sort(self.reverse_sort_check_box.isChecked())
+
+    def set_reverse_sort(self, checked: bool):
+        self.proxy_image_list_model.set_reverse_sort(checked)
 
     def set_selection_mode(self, selection_mode: str):
         if selection_mode == SelectionMode.DEFAULT:

@@ -16,8 +16,8 @@ models.
 - Automatic caption and tag generation
 - Batch tag operations for renaming, deleting, and sorting tags
 - Advanced image list filtering
-- Sorting the image list by name or creation date
-
+- Sorting the image list by name, creation date, modification date, tag
+  count, or randomly
 ## Installation
 
 The easiest way to use the application is to download the latest release from
