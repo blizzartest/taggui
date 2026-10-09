@@ -64,39 +64,51 @@ class WdTaggerModel:
                 elif category == '4':
                     self.character_tags_indices.append(index)
 
+        # Boolean mask that selects the non-rating tags; computed once so
+        # that the per-image tag post-processing is a cheap vectorized
+        # operation instead of Python loops over every tag.
+        self.non_rating_mask = np.array(
+            [index not in self.rating_tags_indices
+             for index in range(len(self.tags))], dtype=bool)
+        self.non_rating_tags = [tag for tag, keep in
+                                zip(self.tags, self.non_rating_mask) if keep]
+        self.input_name = None
+        self.output_name = None
+
     def generate_tags(self, image_array: np.ndarray,
                       wd_tagger_settings: dict) -> tuple[tuple, tuple]:
-        input_name = self.inference_session.get_inputs()[0].name
-        output_name = self.inference_session.get_outputs()[0].name
+        if self.input_name is None:
+            self.input_name = self.inference_session.get_inputs()[0].name
+            self.output_name = self.inference_session.get_outputs()[0].name
         probabilities = self.inference_session.run(
-            [output_name], {input_name: image_array})[0][0].astype(np.float32)
+            [self.output_name], {self.input_name: image_array})[0][0].astype(
+                np.float32)
         # Some exports output logits; convert them to probabilities.
         if probabilities.min() < 0.0 or probabilities.max() > 1.0:
             probabilities = 1.0 / (1.0 + np.exp(-probabilities))
-        # Exclude the rating tags.
-        tags = [tag for index, tag in enumerate(self.tags)
-                if index not in self.rating_tags_indices]
-        probabilities = np.array([
-            probability for index, probability in enumerate(probabilities)
-            if index not in self.rating_tags_indices
-        ])
+        # Exclude the rating tags and apply the probability threshold in one
+        # vectorized pass.
+        probabilities = probabilities[self.non_rating_mask]
+        tags = self.non_rating_tags
+        keep_indices = np.nonzero(
+            probabilities >= wd_tagger_settings['min_probability'])[0]
         tags_to_exclude = get_tags_to_exclude(
             wd_tagger_settings['tags_to_exclude'])
-        tags_and_probabilities = []
-        for tag, probability in zip(tags, probabilities):
-            if (probability < wd_tagger_settings['min_probability']
-                    or tag in tags_to_exclude):
-                continue
-            tags_and_probabilities.append((tag, probability))
-        # Sort the tags by probability.
-        tags_and_probabilities.sort(key=lambda x: x[1], reverse=True)
-        tags_and_probabilities = tags_and_probabilities[
-                                 :wd_tagger_settings['max_tags']]
-        if tags_and_probabilities:
-            tags, probabilities = zip(*tags_and_probabilities)
-        else:
-            tags, probabilities = (), ()
-        return tags, probabilities
+        if tags_to_exclude:
+            keep_indices = np.array(
+                [index for index in keep_indices
+                 if tags[index] not in tags_to_exclude], dtype=int)
+        # Sort the tags by probability, highest first, and limit the count.
+        if keep_indices.size > 1:
+            keep_indices = keep_indices[
+                np.argsort(-probabilities[keep_indices], kind='stable')]
+        keep_indices = keep_indices[:wd_tagger_settings['max_tags']]
+        if keep_indices.size == 0:
+            return (), ()
+        kept_tags = tuple(tags[index] for index in keep_indices)
+        kept_probabilities = tuple(probabilities[index]
+                                   for index in keep_indices)
+        return kept_tags, kept_probabilities
 
 
 class WdTagger(AutoCaptioningModel):

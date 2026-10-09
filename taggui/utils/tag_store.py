@@ -1,5 +1,4 @@
 import json
-import json
 import os
 import sys
 from pathlib import Path
@@ -61,10 +60,9 @@ def load_tags_from_database(directory_path: Path,
     image file no longer exists are skipped.
     """
     tag_index = {}
-    database_paths = [get_tag_database_path(directory_path)]
+    database_paths = {get_tag_database_path(directory_path)}
     for path in directory_path.rglob(TAG_DATABASE_FILENAME):
-        if path not in database_paths:
-            database_paths.append(path)
+        database_paths.add(path)
     for database_path in database_paths:
         if not database_path.is_file():
             continue
@@ -72,39 +70,10 @@ def load_tags_from_database(directory_path: Path,
         for relative_path, tags in load_database_entries(database_path):
             image_path = Path(os.path.normpath(
                 database_directory / relative_path))
-            if not image_path.is_file():
-                continue
-            if image_path in tag_index:
+            if image_path in tag_index or not image_path.is_file():
                 continue
             tag_index[image_path] = [
                 str(tag).strip() for tag in tags if str(tag).strip()]
-    return tag_index
-    try:
-        with open(database_path, encoding='utf-8') as database_file:
-            for line_number, line in enumerate(database_file, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError as exception:
-                    print(f'Failed to parse {database_path} line '
-                          f'{line_number}: {exception}', file=sys.stderr)
-                    continue
-                relative_path = entry.get('file')
-                tags = entry.get('tags')
-                if not isinstance(relative_path, str) or not isinstance(
-                        tags, list):
-                    continue
-                image_path = Path(os.path.normpath(
-                    directory_path / relative_path))
-                if not image_path.is_file():
-                    continue
-                tag_index[image_path] = [
-                    str(tag).strip() for tag in tags if str(tag).strip()]
-    except OSError as exception:
-        print(f'Failed to read tag database {database_path}: {exception}',
-              file=sys.stderr)
     return tag_index
 
 
@@ -151,10 +120,9 @@ def delete_tag_databases(directory_path: Path) -> int:
 
     Returns the number of deleted database files.
     """
-    database_paths = [get_tag_database_path(directory_path)]
+    database_paths = {get_tag_database_path(directory_path)}
     for path in directory_path.rglob(TAG_DATABASE_FILENAME):
-        if path not in database_paths:
-            database_paths.append(path)
+        database_paths.add(path)
     deleted_count = 0
     for database_path in database_paths:
         if not database_path.is_file():
