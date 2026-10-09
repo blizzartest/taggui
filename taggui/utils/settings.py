@@ -12,7 +12,8 @@ DEFAULT_SETTINGS = {
     'models_directory_path': '',
     'tags_subfolder': '.tags',
     'tags_storage_mode': 'single_file',
-    'load_mode': 'full'
+    'load_mode': 'full',
+    'image_list_sort_mode': 'Name'
 }
 
 

@@ -16,6 +16,7 @@ models.
 - Automatic caption and tag generation
 - Batch tag operations for renaming, deleting, and sorting tags
 - Advanced image list filtering
+- Sorting the image list by name or creation date
 
 ## Installation
 
@@ -163,6 +164,8 @@ apply:
 - `path`: Images that contain the filter term in the full file path
     - `path:cat` will match images such as `C:\Users\cats\dog.jpg` or
       `/home/dogs/cat.jpg`.
+- `untagged`: Images that have no tags
+    - `untagged` will match images that do not have any tags.
 - You can also use a filter term with no prefix to filter for images that
   contain the term in either the caption or the file path.
     - `cat` will match images containing `cat` in the caption or file path.

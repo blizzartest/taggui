@@ -52,6 +52,7 @@ class FilterLineEdit(QLineEdit):
         string_filter_expressions = [Group(CaselessLiteral(key) + Suppress(':')
                                            + optionally_quoted_string)
                                      for key in string_filter_keys]
+        untagged_filter_expression = CaselessKeyword('untagged')
         comparison_operator = one_of('= == != < > <= >=')
         number_filter_keys = ['tags', 'chars', 'tokens']
         number_filter_expressions = [Group(CaselessLiteral(key) + Suppress(':')
@@ -61,6 +62,7 @@ class FilterLineEdit(QLineEdit):
         number_filter_expressions = reduce(or_, number_filter_expressions)
         filter_expressions = (string_filter_expressions
                               | number_filter_expressions
+                              | untagged_filter_expression
                               | optionally_quoted_string)
         self.filter_text_parser = infix_notation(
             filter_expressions,
@@ -94,6 +96,11 @@ class FilterLineEdit(QLineEdit):
 class SelectionMode(str, Enum):
     DEFAULT = 'Default'
     TOGGLE = 'Toggle'
+
+
+class SortMode(str, Enum):
+    NAME = 'Name'
+    DATE_CREATED = 'Date created'
 
 
 class ImageListView(QListView):
@@ -368,6 +375,19 @@ class ImageList(QDockWidget):
         self.selection_mode_combo_box.currentTextChanged.connect(
             self.set_selection_mode)
         self.set_selection_mode(self.selection_mode_combo_box.currentText())
+
+        sort_mode_layout = QHBoxLayout()
+        sort_mode_label = QLabel('Sort by')
+        self.sort_mode_combo_box = SettingsComboBox(
+            key='image_list_sort_mode', default=SortMode.NAME)
+        self.sort_mode_combo_box.addItems(list(SortMode))
+        sort_mode_layout.addWidget(sort_mode_label)
+        sort_mode_layout.addWidget(self.sort_mode_combo_box, stretch=1)
+        layout.insertLayout(layout.indexOf(self.list_view), sort_mode_layout)
+        self.sort_mode_combo_box.currentTextChanged.connect(
+            self.proxy_image_list_model.set_sort_mode)
+        self.proxy_image_list_model.set_sort_mode(
+            self.sort_mode_combo_box.currentText())
 
     def set_selection_mode(self, selection_mode: str):
         if selection_mode == SelectionMode.DEFAULT:

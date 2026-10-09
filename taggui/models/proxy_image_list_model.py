@@ -16,10 +16,49 @@ class ProxyImageListModel(QSortFilterProxyModel):
         self.tokenizer = tokenizer
         self.tag_separator = tag_separator
         self.filter: list | None = None
+        self.sort_mode = 'Name'
+        self.creation_times: dict[str, float] = {}
+
+    def set_sort_mode(self, sort_mode: str):
+        self.sort_mode = sort_mode
+        self.creation_times.clear()
+        if sort_mode == 'Date created':
+            self.sort(0, Qt.SortOrder.AscendingOrder)
+        else:
+            # Restore the source model order (sorted by name).
+            self.sort(-1, Qt.SortOrder.AscendingOrder)
+
+    def get_creation_time(self, image: Image) -> float:
+        path_string = str(image.path)
+        if path_string not in self.creation_times:
+            try:
+                stat = image.path.stat()
+                # Creation time is not available on all platforms, so fall
+                # back to the last modification time where it is missing.
+                self.creation_times[path_string] = getattr(
+                    stat, 'st_birthtime', stat.st_mtime)
+            except OSError:
+                self.creation_times[path_string] = 0
+        return self.creation_times[path_string]
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        if self.sort_mode != 'Date created':
+            return False
+        left_image: Image = left.data(Qt.ItemDataRole.UserRole)
+        right_image: Image = right.data(Qt.ItemDataRole.UserRole)
+        if left_image is None or right_image is None:
+            return False
+        left_creation_time = self.get_creation_time(left_image)
+        right_creation_time = self.get_creation_time(right_image)
+        if left_creation_time == right_creation_time:
+            return left_image.path < right_image.path
+        return left_creation_time < right_creation_time
 
     def does_image_match_filter(self, image: Image,
                                 filter_: list | str) -> bool:
         if isinstance(filter_, str):
+            if filter_.lower() == 'untagged':
+                return not image.tags
             return (fnmatchcase(self.tag_separator.join(image.tags),
                                 f'*{filter_}*')
                     or fnmatchcase(str(image.path), f'*{filter_}*'))
