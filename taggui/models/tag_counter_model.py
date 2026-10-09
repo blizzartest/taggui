@@ -76,7 +76,9 @@ class TagCounterModel(QAbstractListModel):
         self.tag_counter.clear()
         for image in images:
             self.tag_counter.update(image.tags)
-        self.image_count = len(images)
+        # Percentages are relative to the tagged images only; untagged
+        # images cannot contain any tag.
+        self.image_count = sum(1 for image in images if image.tags)
         self.most_common_tags = self.tag_counter.most_common()
         self.modelReset.emit()
 
@@ -95,6 +97,8 @@ class TagCounterModel(QAbstractListModel):
         self.tag_counter.clear()
         for tags in tag_index.values():
             self.tag_counter.update(tags)
-        self.image_count = len(tag_index)
+        # Percentages are relative to the tagged images only; untagged
+        # images cannot contain any tag.
+        self.image_count = sum(1 for tags in tag_index.values() if tags)
         self.most_common_tags = self.tag_counter.most_common()
         self.modelReset.emit()
