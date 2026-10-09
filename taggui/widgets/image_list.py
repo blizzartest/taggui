@@ -114,7 +114,7 @@ class ViewMode(str, Enum):
 
 
 class ImageListItemDelegate(QStyledItemDelegate):
-    """In grid mode, show only the file name, truncated to 20 characters."""
+    """In grid mode, do not show any text next to the thumbnail."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,12 +124,9 @@ class ImageListItemDelegate(QStyledItemDelegate):
         self.grid_mode = grid_mode
 
     def displayText(self, value, locale) -> str:
-        if not self.grid_mode:
-            return str(value)
-        text = str(value).split('\n')[0]
-        if len(text) > 20:
-            text = text[:20] + '...'
-        return text
+        if self.grid_mode:
+            return ''
+        return str(value)
 
 
 class ImageListView(QListView):
@@ -218,7 +215,7 @@ class ImageListView(QListView):
             self.setResizeMode(QListView.ResizeMode.Adjust)
             self.setSpacing(2)
             self.setGridSize(QSize(self.image_width + 4,
-                                   self.image_width + 32))
+                                   self.image_width + 2))
         else:
             self.item_delegate.set_grid_mode(False)
             self.setUniformItemSizes(False)
