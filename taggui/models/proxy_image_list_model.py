@@ -2,6 +2,8 @@ import operator
 import random
 from fnmatch import fnmatchcase
 
+import imagesize
+
 from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, Qt
 from transformers import PreTrainedTokenizerBase
 
@@ -22,6 +24,7 @@ class ProxyImageListModel(QSortFilterProxyModel):
         self.creation_times: dict[str, float] = {}
         self.modification_times: dict[str, float] = {}
         self.random_keys: dict[str, float] = {}
+        self.dimensions: dict[str, tuple[int, int] | None] = {}
 
     def set_sort_mode(self, sort_mode: str):
         self.sort_mode = sort_mode
@@ -36,6 +39,11 @@ class ProxyImageListModel(QSortFilterProxyModel):
                 self.sort(-1, Qt.SortOrder.AscendingOrder)
         else:
             self.sort(0, Qt.SortOrder.AscendingOrder)
+        # `QSortFilterProxyModel.sort()` does nothing when it is called with
+        # the same column and sort order as before (e.g. when switching
+        # between two non-name sort modes), so the sort must be re-applied
+        # explicitly.
+        self.invalidate()
 
     def set_reverse_sort(self, reverse_sort: bool):
         self.reverse_sort = reverse_sort
@@ -64,6 +72,27 @@ class ProxyImageListModel(QSortFilterProxyModel):
                 self.modification_times[path_string] = 0
         return self.modification_times[path_string]
 
+    def get_dimensions(self, image: Image) -> tuple[int, int] | None:
+        """
+        Get the dimensions of an image, reading them from the image file if
+        they are not loaded yet (as is the case in tags-only mode). Reading
+        only the image header is fast, and the result is cached.
+        """
+        if image.dimensions is not None:
+            return image.dimensions
+        path_string = str(image.path)
+        if path_string not in self.dimensions:
+            try:
+                # `imagesize.get()` returns `(-1, -1)` when the dimensions
+                # cannot be read.
+                width, height = imagesize.get(image.path)
+                self.dimensions[path_string] = ((width, height)
+                                                if width > 0 and height > 0
+                                                else None)
+            except (OSError, ValueError):
+                self.dimensions[path_string] = None
+        return self.dimensions[path_string]
+
     def get_random_key(self, image: Image) -> float:
         """
         Get a stable random key for an image so that the image order does not
@@ -85,16 +114,18 @@ class ProxyImageListModel(QSortFilterProxyModel):
         if self.sort_mode == 'Dimensions':
             # Sort by the total number of pixels (area), with images of
             # unknown dimensions placed first.
-            if image.dimensions is None:
+            dimensions = self.get_dimensions(image)
+            if dimensions is None:
                 return -1, image.path
-            width, height = image.dimensions
+            width, height = dimensions
             return width * height, image.path
         if self.sort_mode == 'Aspect ratio':
             # Sort by the width-to-height ratio, from tall to wide, with
             # images of unknown dimensions placed first.
-            if image.dimensions is None:
+            dimensions = self.get_dimensions(image)
+            if dimensions is None:
                 return -1.0, image.path
-            width, height = image.dimensions
+            width, height = dimensions
             return width / height, image.path
         if self.sort_mode == 'Random':
             return self.get_random_key(image), image.path
