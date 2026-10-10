@@ -117,6 +117,10 @@ class CaptioningThread(QThread):
                 print(f'Skipping {image.path.name} because its pixel size '
                       'exceeds the decompression bomb limit.')
                 continue
+            except FileNotFoundError:
+                print(f'Skipping {image.path.name} because it could not be '
+                      'found.')
+                continue
             caption, console_output_caption = model.generate_caption(
                 model_inputs, image_prompt)
             tags = add_caption_to_tags(image.tags, caption, caption_position)
