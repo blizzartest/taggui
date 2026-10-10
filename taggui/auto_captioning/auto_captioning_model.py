@@ -7,6 +7,10 @@ import numpy as np
 import torch
 from PIL import Image as PilImage
 from PIL.ImageOps import exif_transpose
+
+# Double the decompression bomb pixel limit so high-resolution images can
+# still be captioned.
+PilImage.MAX_IMAGE_PIXELS = 2 * PilImage.MAX_IMAGE_PIXELS
 from transformers import (AutoModelForVision2Seq, AutoProcessor,
                           BatchFeature, BitsAndBytesConfig)
 from transformers.utils.import_utils import is_torch_bf16_gpu_available

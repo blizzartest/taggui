@@ -3,6 +3,7 @@ from pathlib import Path
 from time import perf_counter
 
 from PIL import UnidentifiedImageError
+from PIL.Image import DecompressionBombError
 from PySide6.QtCore import QModelIndex, QThread, Qt, Signal
 
 from auto_captioning.auto_captioning_model import AutoCaptioningModel
@@ -111,6 +112,10 @@ class CaptioningThread(QThread):
             except UnidentifiedImageError:
                 print(f'Skipping {image.path.name} because its file format is '
                       'not supported or it is a corrupted image.')
+                continue
+            except DecompressionBombError:
+                print(f'Skipping {image.path.name} because its pixel size '
+                      'exceeds the decompression bomb limit.')
                 continue
             caption, console_output_caption = model.generate_caption(
                 model_inputs, image_prompt)
