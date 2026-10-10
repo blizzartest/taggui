@@ -604,6 +604,8 @@ class MainWindow(QMainWindow):
             self.select_first_search_result_if_none_selected)
         self.image_list.list_view.directory_reload_requested.connect(
             self.reload_directory)
+        self.image_list.list_view.images_deleted.connect(
+            self.handle_images_deleted)
         self.image_list.list_view.tags_paste_requested.connect(
             self.image_list_model.add_tags)
         # Connecting the signal directly without `isVisible()` causes the menu
@@ -725,6 +727,28 @@ class MainWindow(QMainWindow):
         # The filter is only applied on Enter in tags-only mode, so apply it
         # immediately here.
         self.set_image_list_filter()
+
+    @Slot(list)
+    def handle_images_deleted(self, deleted_image_paths: list):
+        """Remove deleted images from the image list in place, then select a
+        nearby image if the selection was removed."""
+        # Remember the current index before the removal so that a nearby
+        # image can be selected if the current image was deleted.
+        current_index = self.image_list.list_view.currentIndex()
+        current_row = current_index.row() if current_index.isValid() else None
+        self.image_list_model.remove_images(deleted_image_paths)
+        self.update_tag_counter()
+        if (current_row is None
+                or self.image_list.list_view.currentIndex().isValid()):
+            return
+        row_count = self.proxy_image_list_model.rowCount()
+        if row_count == 0:
+            return
+        # Select the image that now occupies the row of the deleted image,
+        # or the last image if the deleted image was at the end.
+        select_row = min(current_row, row_count - 1)
+        self.image_list.list_view.setCurrentIndex(
+            self.proxy_image_list_model.index(select_row, 0))
 
     @Slot(str)
     def add_tag_to_selected_images(self, tag: str):

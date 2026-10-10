@@ -440,6 +440,43 @@ class ImageListModel(QAbstractListModel):
 
         self.endResetModel()
 
+    def remove_images(self, image_paths: list[Path]):
+        """Remove images from the model in place after they were deleted
+        from disk, instead of reloading the whole directory."""
+        # If a background search is running, cancel it; its results may
+        # reference deleted paths and the list is about to change anyway.
+        self.cancel_background_loading()
+        path_set = set(image_paths)
+        for image_path in path_set:
+            self.tag_index.pop(image_path, None)
+        # The tag database is rewritten as a whole, so save it now that the
+        # deleted images have been removed from the tag index.
+        self.database_dirty = True
+        self.save_tag_database()
+        self.database_save_timer.stop()
+        removed_source_rows = [row for row, image in enumerate(self.images)
+                                if image.path in path_set]
+        if not removed_source_rows:
+            return
+        # Remove contiguous runs of rows from the bottom up so that the row
+        # indices of the runs that are removed later are not shifted.
+        runs = []
+        run_start = removed_source_rows[0]
+        previous_row = run_start
+        for row in removed_source_rows[1:]:
+            if row != previous_row + 1:
+                runs.append((run_start, previous_row))
+                run_start = row
+            previous_row = row
+        runs.append((run_start, previous_row))
+        for first_row, last_row in reversed(runs):
+            self.beginRemoveRows(QModelIndex(), first_row, last_row)
+            del self.images[first_row:last_row + 1]
+            self.endRemoveRows()
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.update_undo_and_redo_actions_requested.emit()
+
     def build_tag_index(self, directory_path: Path, image_suffixes: set[str],
                         tags_subfolder: str,
                         image_paths: set[Path] | None = None,

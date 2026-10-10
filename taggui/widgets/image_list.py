@@ -167,6 +167,7 @@ class ImageListItemDelegate(QStyledItemDelegate):
 class ImageListView(QListView):
     tags_paste_requested = Signal(list, list)
     directory_reload_requested = Signal()
+    images_deleted = Signal(list)
 
     def __init__(self, parent, proxy_image_list_model: ProxyImageListModel,
                  tag_separator: str, image_width: int):
@@ -400,9 +401,12 @@ class ImageListView(QListView):
         reply = get_confirmation_dialog_reply(title, question)
         if reply != QMessageBox.StandardButton.Yes:
             return
+        deleted_image_paths = []
         for image in selected_images:
             image_file = QFile(image.path)
-            if not image_file.moveToTrash():
+            if image_file.moveToTrash():
+                deleted_image_paths.append(image.path)
+            else:
                 QMessageBox.critical(self, 'Error',
                                      f'Failed to delete {image.path}.')
             caption_file_path = image.path.with_suffix('.txt')
@@ -412,7 +416,8 @@ class ImageListView(QListView):
                     QMessageBox.critical(self, 'Error',
                                          f'Failed to delete '
                                          f'{caption_file_path}.')
-        self.directory_reload_requested.emit()
+        if deleted_image_paths:
+            self.images_deleted.emit(deleted_image_paths)
 
     @Slot()
     def open_image(self):
