@@ -17,6 +17,8 @@ from pyparsing import (CaselessKeyword, CaselessLiteral, Group, OpAssoc,
                        infix_notation, nums, one_of, printables)
 
 from models.proxy_image_list_model import ProxyImageListModel
+from utils.danbooru_search import (DanbooruSearchError,
+                                   parse_danbooru_search_text)
 from utils.image import Image
 from utils.settings import DEFAULT_SETTINGS, get_settings
 from utils.settings_widgets import (SettingsBigCheckBox, SettingsComboBox)
@@ -38,12 +40,20 @@ def replace_filter_wildcards(filter_: str | list) -> str | list:
     return replaced_filter
 
 
+class FilterSyntax(str, Enum):
+    DEFAULT = 'Default'
+    DANBOORU = 'Danbooru'
+
+
 class FilterLineEdit(QLineEdit):
+    syntax_changed = Signal(str)
+
     def __init__(self):
         super().__init__()
-        self.setPlaceholderText('Filter Images')
         self.setStyleSheet('padding: 8px;')
         self.setClearButtonEnabled(True)
+        self.syntax = ''
+        self.set_syntax('Default')
         optionally_quoted_string = (QuotedString(quote_char='"', esc_char='\\')
                                     | QuotedString(quote_char="'",
                                                    esc_char='\\')
@@ -71,18 +81,32 @@ class FilterLineEdit(QLineEdit):
              (CaselessKeyword('AND'), 2, OpAssoc.LEFT),
              (CaselessKeyword('OR'), 2, OpAssoc.LEFT)])
 
+    def set_syntax(self, syntax: str):
+        if syntax == self.syntax:
+            return
+        self.syntax = syntax
+        if syntax == 'Danbooru':
+            self.setPlaceholderText(
+                'Search Images (Danbooru syntax, e.g. blonde_hair blue_eyes)')
+        else:
+            self.setPlaceholderText('Filter Images')
+        self.syntax_changed.emit(syntax)
+
     def parse_filter_text(self) -> list | str | None:
         filter_text = self.text()
         if not filter_text:
             self.setStyleSheet('padding: 8px;')
             return None
         try:
-            filter_ = self.filter_text_parser.parse_string(
-                filter_text, parse_all=True).as_list()[0]
+            if self.syntax == 'Danbooru':
+                filter_ = parse_danbooru_search_text(filter_text)
+            else:
+                filter_ = self.filter_text_parser.parse_string(
+                    filter_text, parse_all=True).as_list()[0]
             filter_ = replace_filter_wildcards(filter_)
             self.setStyleSheet('padding: 8px;')
             return filter_
-        except ParseException:
+        except (ParseException, DanbooruSearchError):
             # Change the background color when the filter text is invalid.
             if self.palette().color(self.backgroundRole()).lightness() < 128:
                 # Dark red for dark mode.
@@ -143,6 +167,7 @@ class ImageListItemDelegate(QStyledItemDelegate):
 class ImageListView(QListView):
     tags_paste_requested = Signal(list, list)
     directory_reload_requested = Signal()
+    images_deleted = Signal(list)
 
     def __init__(self, parent, proxy_image_list_model: ProxyImageListModel,
                  tag_separator: str, image_width: int):
@@ -376,9 +401,12 @@ class ImageListView(QListView):
         reply = get_confirmation_dialog_reply(title, question)
         if reply != QMessageBox.StandardButton.Yes:
             return
+        deleted_image_paths = []
         for image in selected_images:
             image_file = QFile(image.path)
-            if not image_file.moveToTrash():
+            if image_file.moveToTrash():
+                deleted_image_paths.append(image.path)
+            else:
                 QMessageBox.critical(self, 'Error',
                                      f'Failed to delete {image.path}.')
             caption_file_path = image.path.with_suffix('.txt')
@@ -388,7 +416,8 @@ class ImageListView(QListView):
                     QMessageBox.critical(self, 'Error',
                                          f'Failed to delete '
                                          f'{caption_file_path}.')
-        self.directory_reload_requested.emit()
+        if deleted_image_paths:
+            self.images_deleted.emit(deleted_image_paths)
 
     @Slot()
     def open_image(self):
@@ -429,6 +458,17 @@ class ImageList(QDockWidget):
                              | Qt.DockWidgetArea.RightDockWidgetArea)
 
         self.filter_line_edit = FilterLineEdit()
+        syntax_layout = QHBoxLayout()
+        syntax_label = QLabel('Syntax')
+        self.filter_syntax_combo_box = SettingsComboBox(
+            key='image_list_filter_syntax', default=FilterSyntax.DEFAULT)
+        self.filter_syntax_combo_box.addItems(list(FilterSyntax))
+        self.filter_line_edit.set_syntax(
+            self.filter_syntax_combo_box.currentText())
+        syntax_layout.addWidget(syntax_label)
+        syntax_layout.addWidget(self.filter_syntax_combo_box, stretch=1)
+        self.filter_syntax_combo_box.currentTextChanged.connect(
+            self.filter_line_edit.set_syntax)
         selection_mode_layout = QHBoxLayout()
         selection_mode_label = QLabel('Selection mode')
         self.selection_mode_combo_box = SettingsComboBox(
@@ -451,6 +491,7 @@ class ImageList(QDockWidget):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.addWidget(self.filter_line_edit)
+        layout.addLayout(syntax_layout)
         layout.addLayout(selection_mode_layout)
         layout.addWidget(self.list_view)
         layout.addWidget(self.image_index_label)

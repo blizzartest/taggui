@@ -18,6 +18,7 @@ from models.image_tag_list_model import ImageTagListModel
 from models.proxy_image_list_model import ProxyImageListModel
 from models.tag_counter_model import TagCounterModel
 from utils.big_widgets import BigPushButton
+from utils.danbooru_search import quote_tag_for_danbooru_search
 from utils.image import Image
 from utils.key_press_forwarder import KeyPressForwarder
 from utils.settings import DEFAULT_SETTINGS, get_settings, get_tag_separator
@@ -568,6 +569,10 @@ class MainWindow(QMainWindow):
             self.handle_image_filter_text_changed)
         self.image_list.filter_line_edit.returnPressed.connect(
             self.set_image_list_filter)
+        # Re-apply the current filter text with the new syntax right away so
+        # that switching between the two syntaxes has an immediate effect.
+        self.image_list.filter_line_edit.syntax_changed.connect(
+            lambda _: self.set_image_list_filter())
         self.image_list_selection_model.currentChanged.connect(
             self.save_image_index)
         self.image_list_selection_model.currentChanged.connect(
@@ -599,6 +604,8 @@ class MainWindow(QMainWindow):
             self.select_first_search_result_if_none_selected)
         self.image_list.list_view.directory_reload_requested.connect(
             self.reload_directory)
+        self.image_list.list_view.images_deleted.connect(
+            self.handle_images_deleted)
         self.image_list.list_view.tags_paste_requested.connect(
             self.image_list_model.add_tags)
         # Connecting the signal directly without `isVisible()` causes the menu
@@ -676,16 +683,20 @@ class MainWindow(QMainWindow):
         self.image_tags_editor.tag_input_box.tags_addition_requested.connect(
             self.image_list_model.add_tags)
 
-    @Slot()
+    @Slot(str)
     def set_image_list_filter_text(self, selected_tag: str):
         """
         Construct and set the image list filter text from the selected tag in
         the all tags list.
         """
-        escaped_selected_tag = (selected_tag.replace('\\', '\\\\')
-                                .replace('"', r'\"').replace("'", r"\'"))
-        self.image_list.filter_line_edit.setText(
-            f'tag:"{escaped_selected_tag}"')
+        filter_line_edit = self.image_list.filter_line_edit
+        if filter_line_edit.syntax == 'Danbooru':
+            filter_line_edit.setText(
+                quote_tag_for_danbooru_search(selected_tag))
+        else:
+            escaped_selected_tag = (selected_tag.replace('\\', '\\\\')
+                                    .replace('"', r'\"').replace("'", r"\'"))
+            filter_line_edit.setText(f'tag:"{escaped_selected_tag}"')
         # The filter is only applied on Enter in tags-only mode, so apply it
         # immediately here.
         self.set_image_list_filter()
@@ -696,18 +707,48 @@ class MainWindow(QMainWindow):
         Add the tag to the image list filter text, keeping any filters that
         are already there.
         """
-        escaped_tag = (tag.replace('\\', '\\\\').replace('"', r'\"')
-                       .replace("'", r"\'"))
         filter_line_edit = self.image_list.filter_line_edit
-        filter_text = filter_line_edit.text()
-        if filter_text:
-            filter_text += f' AND tag:"{escaped_tag}"'
+        if filter_line_edit.syntax == 'Danbooru':
+            filter_text = filter_line_edit.text()
+            tag_text = quote_tag_for_danbooru_search(tag)
+            if filter_text:
+                filter_text += f' {tag_text}'
+            else:
+                filter_text = tag_text
         else:
-            filter_text = f'tag:"{escaped_tag}"'
+            escaped_tag = (tag.replace('\\', '\\\\').replace('"', r'\"')
+                           .replace("'", r"\'"))
+            filter_text = filter_line_edit.text()
+            if filter_text:
+                filter_text += f' AND tag:"{escaped_tag}"'
+            else:
+                filter_text = f'tag:"{escaped_tag}"'
         filter_line_edit.setText(filter_text)
         # The filter is only applied on Enter in tags-only mode, so apply it
         # immediately here.
         self.set_image_list_filter()
+
+    @Slot(list)
+    def handle_images_deleted(self, deleted_image_paths: list):
+        """Remove deleted images from the image list in place, then select a
+        nearby image if the selection was removed."""
+        # Remember the current index before the removal so that a nearby
+        # image can be selected if the current image was deleted.
+        current_index = self.image_list.list_view.currentIndex()
+        current_row = current_index.row() if current_index.isValid() else None
+        self.image_list_model.remove_images(deleted_image_paths)
+        self.update_tag_counter()
+        if (current_row is None
+                or self.image_list.list_view.currentIndex().isValid()):
+            return
+        row_count = self.proxy_image_list_model.rowCount()
+        if row_count == 0:
+            return
+        # Select the image that now occupies the row of the deleted image,
+        # or the last image if the deleted image was at the end.
+        select_row = min(current_row, row_count - 1)
+        self.image_list.list_view.setCurrentIndex(
+            self.proxy_image_list_model.index(select_row, 0))
 
     @Slot(str)
     def add_tag_to_selected_images(self, tag: str):
