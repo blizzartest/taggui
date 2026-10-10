@@ -18,6 +18,7 @@ from models.image_tag_list_model import ImageTagListModel
 from models.proxy_image_list_model import ProxyImageListModel
 from models.tag_counter_model import TagCounterModel
 from utils.big_widgets import BigPushButton
+from utils.danbooru_search import quote_tag_for_danbooru_search
 from utils.image import Image
 from utils.key_press_forwarder import KeyPressForwarder
 from utils.settings import DEFAULT_SETTINGS, get_settings, get_tag_separator
@@ -568,6 +569,10 @@ class MainWindow(QMainWindow):
             self.handle_image_filter_text_changed)
         self.image_list.filter_line_edit.returnPressed.connect(
             self.set_image_list_filter)
+        # Re-apply the current filter text with the new syntax right away so
+        # that switching between the two syntaxes has an immediate effect.
+        self.image_list.filter_line_edit.syntax_changed.connect(
+            lambda _: self.set_image_list_filter())
         self.image_list_selection_model.currentChanged.connect(
             self.save_image_index)
         self.image_list_selection_model.currentChanged.connect(
@@ -676,16 +681,20 @@ class MainWindow(QMainWindow):
         self.image_tags_editor.tag_input_box.tags_addition_requested.connect(
             self.image_list_model.add_tags)
 
-    @Slot()
+    @Slot(str)
     def set_image_list_filter_text(self, selected_tag: str):
         """
         Construct and set the image list filter text from the selected tag in
         the all tags list.
         """
-        escaped_selected_tag = (selected_tag.replace('\\', '\\\\')
-                                .replace('"', r'\"').replace("'", r"\'"))
-        self.image_list.filter_line_edit.setText(
-            f'tag:"{escaped_selected_tag}"')
+        filter_line_edit = self.image_list.filter_line_edit
+        if filter_line_edit.syntax == 'Danbooru':
+            filter_line_edit.setText(
+                quote_tag_for_danbooru_search(selected_tag))
+        else:
+            escaped_selected_tag = (selected_tag.replace('\\', '\\\\')
+                                    .replace('"', r'\"').replace("'", r"\'"))
+            filter_line_edit.setText(f'tag:"{escaped_selected_tag}"')
         # The filter is only applied on Enter in tags-only mode, so apply it
         # immediately here.
         self.set_image_list_filter()
@@ -696,14 +705,22 @@ class MainWindow(QMainWindow):
         Add the tag to the image list filter text, keeping any filters that
         are already there.
         """
-        escaped_tag = (tag.replace('\\', '\\\\').replace('"', r'\"')
-                       .replace("'", r"\'"))
         filter_line_edit = self.image_list.filter_line_edit
-        filter_text = filter_line_edit.text()
-        if filter_text:
-            filter_text += f' AND tag:"{escaped_tag}"'
+        if filter_line_edit.syntax == 'Danbooru':
+            filter_text = filter_line_edit.text()
+            tag_text = quote_tag_for_danbooru_search(tag)
+            if filter_text:
+                filter_text += f' {tag_text}'
+            else:
+                filter_text = tag_text
         else:
-            filter_text = f'tag:"{escaped_tag}"'
+            escaped_tag = (tag.replace('\\', '\\\\').replace('"', r'\"')
+                           .replace("'", r"\'"))
+            filter_text = filter_line_edit.text()
+            if filter_text:
+                filter_text += f' AND tag:"{escaped_tag}"'
+            else:
+                filter_text = f'tag:"{escaped_tag}"'
         filter_line_edit.setText(filter_text)
         # The filter is only applied on Enter in tags-only mode, so apply it
         # immediately here.
