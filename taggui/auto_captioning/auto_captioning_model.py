@@ -238,8 +238,15 @@ class AutoCaptioningModel:
         frames = []
         for index in frame_indices:
             pil_image.seek(int(index))
-            frame = exif_transpose(pil_image)
-            frame = frame.convert(self.image_mode)
+            # GIFs and animated WebPs do not carry EXIF orientation data,
+            # so exif_transpose is unnecessary. More importantly, calling
+            # exif_transpose (which internally calls load()) can fail on
+            # GIF frames whose data is stored as partial deltas.
+            try:
+                frame = pil_image.convert(self.image_mode)
+            except OSError:
+                # Skip frames that cannot be decoded (e.g. truncated data).
+                continue
             frames.append(frame.copy())
         return frames
 

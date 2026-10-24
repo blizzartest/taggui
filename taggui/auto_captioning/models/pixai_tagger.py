@@ -213,9 +213,11 @@ class PixaiTagger(AutoCaptioningModel):
                          image: 'captioning_thread.Image') -> np.ndarray:
         if self.multiframe_enabled:
             frames = self.load_frames(image, self.multiframe_frame_count)
-            if len(frames) > 1:
-                return np.stack(
-                    [self.preprocess_frame(frame) for frame in frames])
+            if frames:
+                if len(frames) > 1:
+                    return np.stack(
+                        [self.preprocess_frame(frame) for frame in frames])
+                return self.preprocess_frame(frames[0])
         pil_image = self.load_image(image)
         return self.preprocess_frame(pil_image)
 
