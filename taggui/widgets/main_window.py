@@ -96,8 +96,9 @@ class MainWindow(QMainWindow):
                                             self.image_list)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
                            self.auto_captioner)
+        self.tabifyDockWidget(self.image_tags_editor, self.all_tags_editor)
         self.tabifyDockWidget(self.all_tags_editor, self.auto_captioner)
-        self.all_tags_editor.raise_()
+        self.image_tags_editor.raise_()
         # Set default widths for the dock widgets.
         # Temporarily set a size for the window so that the dock widgets can be
         # expanded to their default widths. If the window geometry was
