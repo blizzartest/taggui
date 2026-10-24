@@ -11,6 +11,7 @@ from pathlib import Path
 
 import exifread
 import imagesize
+from PIL import Image as PilImage
 
 from utils.image import Image
 from utils.settings import DEFAULT_SETTINGS, get_settings
@@ -276,24 +277,23 @@ class ImageListModel(QAbstractListModel):
         Returns (thumbnail, is_animated). For animated GIFs the first frame
         is used as the initial thumbnail and `is_animated` is True so that
         the caller can start a QMovie for playback."""
+        is_animated = False
         if image.path.suffix.lower() == '.gif':
-            movie = QMovie(str(image.path))
-            if movie.isValid() and movie.frameCount() > 1:
-                image.is_animated = True
-                qimage = movie.currentImage()
-                if qimage.isNull():
-                    return None, True
-                return qimage.scaledToWidth(
-                    self.image_list_image_width,
-                    Qt.TransformationMode.SmoothTransformation), True
+            try:
+                pil_image = PilImage.open(image.path)
+                is_animated = (getattr(pil_image, 'is_animated', False)
+                               and getattr(pil_image, 'n_frames', 1) > 1)
+                pil_image.close()
+            except Exception:
+                is_animated = False
         image_reader = QImageReader(str(image.path))
         image_reader.setAutoTransform(True)
         qimage = image_reader.read()
         if qimage.isNull():
-            return None, False
+            return None, is_animated
         return qimage.scaledToWidth(
             self.image_list_image_width,
-            Qt.TransformationMode.SmoothTransformation), False
+            Qt.TransformationMode.SmoothTransformation), is_animated
 
     def submit_thumbnail_task(self, image: Image, row: int,
                               to_front: bool = False):
@@ -342,10 +342,17 @@ class ImageListModel(QAbstractListModel):
         movie's frameChanged signal updates the QIcon so that the view
         repaints with the current frame."""
         movie = QMovie(str(image.path))
-        if not movie.isValid():
+        if not movie.isValid() or movie.frameCount() <= 1:
             return
-        movie.setScaledSize(QSize(self.image_list_image_width,
-                                  self.image_list_image_width * 3))
+        # Scale the movie to the same width as static thumbnails, preserving
+        # the aspect ratio so the animated thumbnail matches the size of
+        # static thumbnails in the list.
+        movie_size = movie.scaledSize()
+        if not movie_size.isEmpty():
+            scaled_width = self.image_list_image_width
+            scaled_height = int(scaled_width * movie_size.height()
+                                / movie_size.width())
+            movie.setScaledSize(QSize(scaled_width, scaled_height))
         image.movie = movie
         movie.frameChanged.connect(
             lambda _frame: self.update_movie_thumbnail(image))
@@ -359,7 +366,13 @@ class ImageListModel(QAbstractListModel):
         current_frame = image.movie.currentPixmap()
         if current_frame.isNull():
             return
-        current_frame.setDevicePixelRatio(1)
+        # Keep the original (unscaled) frame size for SizeHintRole so that
+        # the row height matches static thumbnails.
+        frame_size = image.movie.scaledSize()
+        if not frame_size.isEmpty():
+            current_frame = current_frame.scaled(
+                frame_size, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
         image.thumbnail = QIcon(current_frame)
         try:
             row = self.images.index(image)

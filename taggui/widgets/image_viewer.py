@@ -35,7 +35,14 @@ class ImageLabel(QLabel):
             movie = QMovie(str(image_path))
             if movie.isValid() and movie.frameCount() > 1:
                 self.movie = movie
-                movie.setScaledSize(self.size() * self.devicePixelRatio())
+                # Scale the movie to fit the label while preserving the
+                # aspect ratio, matching how static images are scaled.
+                target_size = self.size() * self.devicePixelRatio()
+                movie_size = movie.scaledSize()
+                if not movie_size.isEmpty():
+                    scaled = movie_size.scaled(
+                        target_size, Qt.AspectRatioMode.KeepAspectRatio)
+                    movie.setScaledSize(scaled)
                 self.setMovie(movie)
                 movie.start()
                 return
