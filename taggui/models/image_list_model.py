@@ -21,7 +21,7 @@ from utils.tag_store import (delete_tag_databases, get_tags_storage_mode,
 from utils.utils import get_confirmation_dialog_reply, pluralize
 from PySide6.QtCore import (QAbstractListModel, QModelIndex, QSize, Qt, Signal,
                             Slot, QTimer)
-from PySide6.QtGui import QIcon, QImage, QImageReader, QPixmap
+from PySide6.QtGui import QIcon, QImage, QImageReader, QMovie, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
 UNDO_STACK_SIZE = 32
@@ -270,16 +270,30 @@ class ImageListModel(QAbstractListModel):
             return QSize(self.image_list_image_width,
                          int(self.image_list_image_width * height / width))
 
-    def load_thumbnail_for_image(self, image: Image) -> QImage | None:
-        """Load and generate a thumbnail image for a single image."""
+    def load_thumbnail_for_image(self, image: Image) -> tuple[QImage | None, bool]:
+        """Load and generate a thumbnail image for a single image.
+
+        Returns (thumbnail, is_animated). For animated GIFs the first frame
+        is used as the initial thumbnail and `is_animated` is True so that
+        the caller can start a QMovie for playback."""
+        if image.path.suffix.lower() == '.gif':
+            movie = QMovie(str(image.path))
+            if movie.isValid() and movie.frameCount() > 1:
+                image.is_animated = True
+                qimage = movie.currentImage()
+                if qimage.isNull():
+                    return None, True
+                return qimage.scaledToWidth(
+                    self.image_list_image_width,
+                    Qt.TransformationMode.SmoothTransformation), True
         image_reader = QImageReader(str(image.path))
         image_reader.setAutoTransform(True)
         qimage = image_reader.read()
         if qimage.isNull():
-            return None
+            return None, False
         return qimage.scaledToWidth(
             self.image_list_image_width,
-            Qt.TransformationMode.SmoothTransformation)
+            Qt.TransformationMode.SmoothTransformation), False
 
     def submit_thumbnail_task(self, image: Image, row: int,
                               to_front: bool = False):
@@ -310,16 +324,62 @@ class ImageListModel(QAbstractListModel):
             priority, sequence, image, row, generation = (
                 self.thumbnail_task_queue.get())
             if generation != self.load_generation:
-                self.completed_thumbnails.put((image, None, row, generation))
+                self.completed_thumbnails.put((image, None, False, row,
+                                               generation))
                 continue
             try:
-                thumbnail = self.load_thumbnail_for_image(image)
+                thumbnail, is_animated = self.load_thumbnail_for_image(image)
             except Exception:
-                thumbnail = None
+                thumbnail, is_animated = None, False
             # The completed queue is bounded; block until the GUI thread has
             # flushed enough results. This throttles the workers so that the
             # GUI thread is never flooded with thumbnail updates.
-            self.completed_thumbnails.put((image, thumbnail, row, generation))
+            self.completed_thumbnails.put((image, thumbnail, is_animated, row,
+                                           generation))
+
+    def start_thumbnail_movie(self, image: Image):
+        """Create and start a QMovie for an animated GIF thumbnail. The
+        movie's frameChanged signal updates the QIcon so that the view
+        repaints with the current frame."""
+        movie = QMovie(str(image.path))
+        if not movie.isValid():
+            return
+        movie.setScaledSize(QSize(self.image_list_image_width,
+                                  self.image_list_image_width * 3))
+        image.movie = movie
+        movie.frameChanged.connect(
+            lambda _frame: self.update_movie_thumbnail(image))
+        movie.start()
+
+    def update_movie_thumbnail(self, image: Image):
+        """Update the QIcon of an animated thumbnail from the movie's
+        current frame and emit dataChanged so the view repaints."""
+        if image.movie is None:
+            return
+        current_frame = image.movie.currentPixmap()
+        if current_frame.isNull():
+            return
+        current_frame.setDevicePixelRatio(1)
+        image.thumbnail = QIcon(current_frame)
+        try:
+            row = self.images.index(image)
+        except ValueError:
+            return
+        self.dataChanged.emit(self.index(row), self.index(row),
+                              [Qt.ItemDataRole.DecorationRole,
+                               Qt.ItemDataRole.SizeHintRole])
+
+    def stop_thumbnail_movie(self, image: Image):
+        """Stop and discard the QMovie of an image, if any."""
+        if image.movie is not None:
+            image.movie.stop()
+            image.movie = None
+
+    def stop_all_thumbnail_movies(self):
+        """Stop all running thumbnail movies. Call before clearing the
+        image list to avoid dangling signal connections."""
+        for image in self.images:
+            self.stop_thumbnail_movie(image)
 
     @Slot()
     def flush_completed_thumbnails(self):
@@ -333,7 +393,7 @@ class ImageListModel(QAbstractListModel):
         last_row = None
         while True:
             try:
-                image, thumbnail, row, generation = (
+                image, thumbnail, is_animated, row, generation = (
                     self.completed_thumbnails.get_nowait())
             except queue.Empty:
                 break
@@ -353,6 +413,8 @@ class ImageListModel(QAbstractListModel):
                 self.failed_thumbnail_paths.add(image.path)
                 continue
             image.thumbnail = QIcon(QPixmap.fromImage(thumbnail))
+            if is_animated:
+                self.start_thumbnail_movie(image)
             if first_row is None or row < first_row:
                 first_row = row
             if last_row is None or row > last_row:
@@ -376,6 +438,7 @@ class ImageListModel(QAbstractListModel):
         self.save_tag_database()
         self.database_save_timer.stop()
         self.cancel_background_loading()
+        self.stop_all_thumbnail_movies()
         self.beginResetModel()
         self.images.clear()
         self.tag_index.clear()
@@ -449,6 +512,11 @@ class ImageListModel(QAbstractListModel):
         path_set = set(image_paths)
         for image_path in path_set:
             self.tag_index.pop(image_path, None)
+        # Stop the thumbnail movies of the images that are about to be
+        # removed so that no frameChanged signals fire after removal.
+        for image in self.images:
+            if image.path in path_set:
+                self.stop_thumbnail_movie(image)
         # The tag database is rewritten as a whole, so save it now that the
         # deleted images have been removed from the tag index.
         self.database_dirty = True
