@@ -183,9 +183,9 @@ class ImageListView(QListView):
         self.item_delegate = ImageListItemDelegate(self)
         self.setItemDelegate(self.item_delegate)
         self.image_width = image_width
-        self.set_view_mode(ViewMode.LIST)
         # Debounce timer for visibility updates so that rapid scrolling does
-        # not cause excessive play/pause calls.
+        # not cause excessive play/pause calls. Must be created before
+        # set_view_mode() because set_view_mode() starts the timer.
         self.visibility_timer = QTimer(self)
         self.visibility_timer.setSingleShot(True)
         self.visibility_timer.setInterval(100)
@@ -194,6 +194,7 @@ class ImageListView(QListView):
             self.visibility_timer.start)
         self.visible_source_rows_changed.connect(
             self._on_visible_source_rows_changed)
+        self.set_view_mode(ViewMode.LIST)
 
         invert_selection_action = self.addAction('Invert Selection')
         invert_selection_action.setShortcut('Ctrl+I')
