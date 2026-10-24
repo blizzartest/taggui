@@ -374,9 +374,8 @@ class ImageListModel(QAbstractListModel):
                 frame_size, Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
         image.thumbnail = QIcon(current_frame)
-        try:
-            row = self.images.index(image)
-        except ValueError:
+        row = image.source_row
+        if not (0 <= row < len(self.images)) or self.images[row] is not image:
             return
         self.dataChanged.emit(self.index(row), self.index(row),
                               [Qt.ItemDataRole.DecorationRole,
@@ -393,6 +392,20 @@ class ImageListModel(QAbstractListModel):
         image list to avoid dangling signal connections."""
         for image in self.images:
             self.stop_thumbnail_movie(image)
+
+    def play_visible_thumbnail_movies(self, visible_source_rows: set[int]):
+        """Resume playback for animated thumbnails whose source rows are in
+        `visible_source_rows`, and pause all others. Only rows that change
+        state are touched, so this is cheap even with many animated GIFs."""
+        for image in self.images:
+            if image.movie is None:
+                continue
+            should_play = image.source_row in visible_source_rows
+            is_running = image.movie.state() == QMovie.MovieState.Running
+            if should_play and not is_running:
+                image.movie.start()
+            elif not should_play and is_running:
+                image.movie.pause()
 
     @Slot()
     def flush_completed_thumbnails(self):
@@ -427,7 +440,11 @@ class ImageListModel(QAbstractListModel):
                 continue
             image.thumbnail = QIcon(QPixmap.fromImage(thumbnail))
             if is_animated:
+                image.is_animated = True
                 self.start_thumbnail_movie(image)
+                # Pause immediately; the view will resume playback for
+                # visible rows.
+                image.movie.pause()
             if first_row is None or row < first_row:
                 first_row = row
             if last_row is None or row > last_row:
@@ -505,12 +522,14 @@ class ImageListModel(QAbstractListModel):
                                     text_file_path_strings, tags_subfolder)
                     for image_path in sorted_image_paths]
                 loaded_images = []
-                for future, image_path in zip(futures, sorted_image_paths):
+                for row, (future, image_path) in enumerate(
+                        zip(futures, sorted_image_paths)):
                     _, dimensions, tags = future.result()
                     if self.tags_storage_mode == 'single_file':
                         tags = self.tag_index.get(image_path, [])
                     loaded_images.append(
-                        Image(image_path, dimensions, tags, None))
+                        Image(image_path, dimensions, tags, None,
+                              source_row=row))
 
             self.images = loaded_images
 
@@ -695,6 +714,8 @@ class ImageListModel(QAbstractListModel):
         first_row = len(self.images)
         self.beginInsertRows(QModelIndex(), first_row,
                              first_row + len(batch) - 1)
+        for offset, image in enumerate(batch):
+            image.source_row = first_row + offset
         self.images.extend(batch)
         self.endInsertRows()
         # Preload the thumbnails of the new images in the background.

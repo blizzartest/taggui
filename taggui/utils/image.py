@@ -16,3 +16,4 @@ class Image:
     thumbnail: QIcon | None = None
     movie: 'QMovie | None' = None
     is_animated: bool = False
+    source_row: int = -1
