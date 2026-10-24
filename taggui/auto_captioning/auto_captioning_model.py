@@ -222,6 +222,27 @@ class AutoCaptioningModel:
         pil_image = pil_image.convert(self.image_mode)
         return pil_image
 
+    def load_frames(self, image: Image, frame_count: int) -> list[PilImage]:
+        """Load up to `frame_count` evenly-spaced frames from an animated
+        image (GIF or WebP). Falls back to a single frame for static
+        images."""
+        pil_image = PilImage.open(image.path)
+        if not getattr(pil_image, 'is_animated', False):
+            pil_image = exif_transpose(pil_image)
+            pil_image = pil_image.convert(self.image_mode)
+            return [pil_image]
+        n_frames = getattr(pil_image, 'n_frames', 1)
+        sample_count = min(frame_count, n_frames)
+        frame_indices = np.linspace(0, n_frames - 1, sample_count,
+                                    dtype=int)
+        frames = []
+        for index in frame_indices:
+            pil_image.seek(int(index))
+            frame = exif_transpose(pil_image)
+            frame = frame.convert(self.image_mode)
+            frames.append(frame.copy())
+        return frames
+
     def get_model_inputs(self, image_prompt: str,
                          image: Image) -> BatchFeature | dict | np.ndarray:
         text = self.get_input_text(image_prompt)

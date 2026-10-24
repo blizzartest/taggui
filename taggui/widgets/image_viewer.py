@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, QSize, Qt, Slot
-from PySide6.QtGui import QImageReader, QPixmap, QResizeEvent
+from PySide6.QtGui import QImageReader, QMovie, QPixmap, QResizeEvent
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from models.proxy_image_list_model import ProxyImageListModel
@@ -12,6 +12,7 @@ class ImageLabel(QLabel):
     def __init__(self):
         super().__init__()
         self.image_path = None
+        self.movie = None
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
@@ -25,6 +26,19 @@ class ImageLabel(QLabel):
 
     def load_image(self, image_path: Path):
         self.image_path = image_path
+        # Stop and discard any running movie before loading a new image.
+        if self.movie is not None:
+            self.movie.stop()
+            self.setMovie(None)
+            self.movie = None
+        if image_path.suffix.lower() == '.gif':
+            movie = QMovie(str(image_path))
+            if movie.isValid() and movie.frameCount() > 1:
+                self.movie = movie
+                movie.setScaledSize(self.size() * self.devicePixelRatio())
+                self.setMovie(movie)
+                movie.start()
+                return
         image_reader = QImageReader(str(image_path))
         # Rotate the image according to the orientation tag.
         image_reader.setAutoTransform(True)

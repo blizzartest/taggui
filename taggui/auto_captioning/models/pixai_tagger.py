@@ -9,7 +9,7 @@ import auto_captioning.captioning_thread as captioning_thread
 from auto_captioning.auto_captioning_model import AutoCaptioningModel
 from auto_captioning.models.wd_tagger import (KAOMOJIS,
                                               get_tags_to_exclude)
-from utils.enums import CaptionDevice
+from utils.enums import CaptionDevice, FrameAggregation
 
 
 def format_tag(tag: str) -> str:
@@ -86,6 +86,54 @@ class PixaiTaggerModel:
             tags, probabilities = (), ()
         return tags, probabilities
 
+    def get_probabilities(self, image_array: np.ndarray) -> np.ndarray:
+        """Run inference on a single preprocessed frame and return the raw
+        sigmoid probabilities for all tags."""
+        pixel_values = torch.from_numpy(image_array).unsqueeze(0).to(
+            self.device, dtype=next(self.model.parameters()).dtype)
+        with torch.inference_mode():
+            probabilities = self.model(pixel_values).sigmoid()[0]
+        return probabilities.cpu().numpy()
+
+    def aggregate_probabilities(
+            self, all_probabilities: list[np.ndarray],
+            aggregation: FrameAggregation) -> np.ndarray:
+        """Aggregate per-frame probabilities into a single array."""
+        stacked = np.stack(all_probabilities, axis=0)
+        if aggregation == FrameAggregation.MAX:
+            return stacked.max(axis=0)
+        return stacked.mean(axis=0)
+
+    def probabilities_to_tags(
+            self, probabilities: np.ndarray,
+            pixai_tagger_settings: dict) -> tuple[tuple, tuple]:
+        """Apply category thresholds, exclusions, sorting, and the max-tags
+        limit to an aggregated probability array."""
+        tags_to_exclude = get_tags_to_exclude(
+            pixai_tagger_settings['tags_to_exclude'])
+        category_thresholds = self.get_category_thresholds(
+            pixai_tagger_settings)
+        tags_and_probabilities = []
+        index = 0
+        for category, count in self.model.config.tags_split:
+            if category in category_thresholds:
+                threshold = category_thresholds[category]
+                for offset in range(count):
+                    probability = float(probabilities[index + offset])
+                    tag = self.tags[index + offset]
+                    if (probability >= threshold
+                            and tag not in tags_to_exclude):
+                        tags_and_probabilities.append((tag, probability))
+            index += count
+        tags_and_probabilities.sort(key=lambda x: x[1], reverse=True)
+        tags_and_probabilities = tags_and_probabilities[
+            :pixai_tagger_settings['max_tags']]
+        if tags_and_probabilities:
+            tags, probabilities_tuple = zip(*tags_and_probabilities)
+        else:
+            tags, probabilities_tuple = (), ()
+        return tags, probabilities_tuple
+
 
 class PixaiTagger(AutoCaptioningModel):
     image_mode = 'RGBA'
@@ -101,6 +149,13 @@ class PixaiTagger(AutoCaptioningModel):
             'pixai_tagger_settings']
         self.show_probabilities = self.pixai_tagger_settings[
             'show_probabilities']
+        self.multiframe_enabled = self.pixai_tagger_settings.get(
+            'multiframe_enabled', False)
+        self.multiframe_frame_count = self.pixai_tagger_settings.get(
+            'multiframe_frame_count', 5)
+        self.multiframe_aggregation = FrameAggregation(
+            self.pixai_tagger_settings.get(
+                'multiframe_aggregation', FrameAggregation.MEAN.value))
 
     def get_error_message(self) -> str | None:
         return None
@@ -124,9 +179,9 @@ class PixaiTagger(AutoCaptioningModel):
                     f'{captioning_start_datetime_string})')
         return f'Generating tags... (device: {device_str})'
 
-    def get_model_inputs(self, image_prompt: str,
-                         image: 'captioning_thread.Image') -> np.ndarray:
-        pil_image = self.load_image(image)
+    def preprocess_frame(self, pil_image: PilImage) -> np.ndarray:
+        """Convert a single PIL frame to the normalized CHW array expected
+        by the model."""
         # Add a white background to the image in case it has transparent
         # areas.
         canvas = PilImage.new('RGBA', pil_image.size, (255, 255, 255))
@@ -154,10 +209,35 @@ class PixaiTagger(AutoCaptioningModel):
         image_array = np.ascontiguousarray(image_array)
         return image_array
 
+    def get_model_inputs(self, image_prompt: str,
+                         image: 'captioning_thread.Image') -> np.ndarray:
+        if self.multiframe_enabled:
+            frames = self.load_frames(image, self.multiframe_frame_count)
+            if len(frames) > 1:
+                return np.stack(
+                    [self.preprocess_frame(frame) for frame in frames])
+        pil_image = self.load_image(image)
+        return self.preprocess_frame(pil_image)
+
     def generate_caption(self, model_inputs: np.ndarray,
                          image_prompt: str) -> tuple[str, str]:
-        tags, probabilities = self.model.generate_tags(
-            model_inputs, self.pixai_tagger_settings)
+        if model_inputs.ndim == 4:
+            # Multi-frame: model_inputs has shape (N, C, H, W).
+            frame_count = model_inputs.shape[0]
+            all_probabilities = []
+            for frame_index in range(frame_count):
+                frame_array = model_inputs[frame_index]
+                probabilities = self.model.get_probabilities(frame_array)
+                all_probabilities.append(probabilities)
+                if self.thread.is_canceled:
+                    break
+            aggregated = self.model.aggregate_probabilities(
+                all_probabilities, self.multiframe_aggregation)
+            tags, probabilities = self.model.probabilities_to_tags(
+                aggregated, self.pixai_tagger_settings)
+        else:
+            tags, probabilities = self.model.generate_tags(
+                model_inputs, self.pixai_tagger_settings)
         caption = self.thread.tag_separator.join(tags)
         if self.show_probabilities:
             console_output_caption = self.thread.tag_separator.join(
