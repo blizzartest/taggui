@@ -356,7 +356,10 @@ class ImageListModel(QAbstractListModel):
         image.movie = movie
         movie.frameChanged.connect(
             lambda _frame: self.update_movie_thumbnail(image))
-        movie.start()
+        # Do not auto-start. The view will call play_visible_thumbnail_movies
+        # to start playback for visible rows only. Starting here would play
+        # every animated GIF in the list simultaneously.
+        movie.setPaused(True)
 
     def update_movie_thumbnail(self, image: Image):
         """Update the QIcon of an animated thumbnail from the movie's
@@ -405,7 +408,7 @@ class ImageListModel(QAbstractListModel):
             if should_play and not is_running:
                 image.movie.start()
             elif not should_play and is_running:
-                image.movie.pause()
+                image.movie.setPaused(True)
 
     @Slot()
     def flush_completed_thumbnails(self):
@@ -442,9 +445,6 @@ class ImageListModel(QAbstractListModel):
             if is_animated:
                 image.is_animated = True
                 self.start_thumbnail_movie(image)
-                # Pause immediately; the view will resume playback for
-                # visible rows.
-                image.movie.pause()
             if first_row is None or row < first_row:
                 first_row = row
             if last_row is None or row > last_row:
