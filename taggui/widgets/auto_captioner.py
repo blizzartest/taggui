@@ -214,7 +214,7 @@ class CaptionSettingsForm(QVBoxLayout):
             self.pixai_multiframe_frame_count_spin_box)
         multiframe_layout.addWidget(QLabel('Aggregation:'))
         multiframe_layout.addWidget(
-            self.pixai_multiframe_aggregation_combo_box)
+            self.pixai_multiframe_aggregation_combo_box, stretch=1)
         pixai_tagger_settings_form.addRow(multiframe_layout)
 
         self.toggle_advanced_settings_form_button = TallPushButton(
