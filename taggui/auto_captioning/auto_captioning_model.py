@@ -230,12 +230,20 @@ class AutoCaptioningModel:
         pil_image = pil_image.convert(self.image_mode)
         return pil_image
 
-    def load_frames(self, image: Image, frame_count: int) -> list[PilImage]:
+    def load_frames(self, image: Image, frame_count: int,
+                    frames_per_interval: int | None = None,
+                    interval_seconds: float | None = None) -> list[PilImage]:
         """Load up to `frame_count` evenly-spaced frames from an animated
         image (GIF or WebP) or a video. Falls back to a single frame for
-        static images."""
+        static images.
+
+        For videos, `frames_per_interval` and `interval_seconds` scale the
+        frame count with the video duration (e.g. 12 frames per 5 seconds).
+        They have no effect on animated images."""
         if is_video_path(image.path):
-            frames = load_video_frames(image.path, frame_count)
+            frames = load_video_frames(image.path, frame_count,
+                                       frames_per_interval=frames_per_interval,
+                                       interval_seconds=interval_seconds)
             if not frames:
                 raise UnidentifiedImageError(
                     f'Could not decode any frame of {image.path}')

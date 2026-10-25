@@ -18,6 +18,10 @@ VIDEO_SUFFIXES = {'.mp4', '.webm', '.mov', '.mkv', '.avi'}
 # black frames at the start of a video are avoided.
 REPRESENTATIVE_FRAME_POSITION = 0.25
 
+# Hard cap on the number of frames extracted from a single video, so that
+# very long videos do not produce excessively large captioning batches.
+MAX_VIDEO_FRAMES = 60
+
 
 def is_video_path(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_SUFFIXES
@@ -45,8 +49,17 @@ def get_video_metadata(video_path: Path) -> tuple[int, int] | None:
 
 
 def load_video_frames(video_path: Path, frame_count: int,
-                      position: float = 0.0) -> list[PilImage]:
-    """Load up to `frame_count` evenly-spaced frames from a video.
+                      position: float = 0.0,
+                      frames_per_interval: int | None = None,
+                      interval_seconds: float | None = None) -> list[PilImage]:
+    """Load evenly-spaced frames from a video.
+
+    `frame_count` is the number of frames to load. If `frames_per_interval`
+    and `interval_seconds` are given, `frame_count` is treated as the number
+    of frames per `interval_seconds` of video and scaled with the actual
+    duration, so that long videos are sampled more densely than short ones.
+    The resulting count is clamped to the video's frame count and to
+    MAX_VIDEO_FRAMES.
 
     `position` is used when only a single frame is requested (frame_count ==
     1) to select the frame as a fraction of the video duration, so that
@@ -68,6 +81,11 @@ def load_video_frames(video_path: Path, frame_count: int,
             total_frames = int(fps * duration)
             if total_frames < 1:
                 return []
+            if frames_per_interval and interval_seconds:
+                frame_count = int(round(
+                    frames_per_interval * duration / interval_seconds))
+                frame_count = min(frame_count, total_frames,
+                                  MAX_VIDEO_FRAMES)
             if frame_count <= 1:
                 frame_indices = [min(int(total_frames * position),
                                      total_frames - 1)]

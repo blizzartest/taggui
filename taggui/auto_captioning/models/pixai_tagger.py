@@ -153,6 +153,12 @@ class PixaiTagger(AutoCaptioningModel):
             'multiframe_enabled', False)
         self.multiframe_frame_count = self.pixai_tagger_settings.get(
             'multiframe_frame_count', 5)
+        # For videos, the frame count is treated as frames per interval and
+        # scaled with the video duration.
+        self.multiframe_frames_per_interval = self.pixai_tagger_settings.get(
+            'multiframe_frames_per_interval', 12)
+        self.multiframe_interval_seconds = self.pixai_tagger_settings.get(
+            'multiframe_interval_seconds', 5.0)
         self.multiframe_aggregation = FrameAggregation(
             self.pixai_tagger_settings.get(
                 'multiframe_aggregation', FrameAggregation.MEAN.value))
@@ -212,7 +218,10 @@ class PixaiTagger(AutoCaptioningModel):
     def get_model_inputs(self, image_prompt: str,
                          image: 'captioning_thread.Image') -> np.ndarray:
         if self.multiframe_enabled:
-            frames = self.load_frames(image, self.multiframe_frame_count)
+            frames = self.load_frames(
+                image, self.multiframe_frame_count,
+                frames_per_interval=self.multiframe_frames_per_interval,
+                interval_seconds=self.multiframe_interval_seconds)
             if frames:
                 if len(frames) > 1:
                     return np.stack(
