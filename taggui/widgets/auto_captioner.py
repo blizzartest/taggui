@@ -510,7 +510,7 @@ class AutoCaptioner(QDockWidget):
         self.processor = None
         self.model = None
         self.model_id: str | None = None
-        self.model_device_type: str | None = None
+        self.model_device: str | None = None
         self.is_model_loaded_in_4_bit = None
         # Whether the last block of text in the console text edit should be
         # replaced with the next block of text that is outputted.

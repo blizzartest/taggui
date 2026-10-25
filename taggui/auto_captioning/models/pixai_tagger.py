@@ -9,7 +9,7 @@ import auto_captioning.captioning_thread as captioning_thread
 from auto_captioning.auto_captioning_model import AutoCaptioningModel
 from auto_captioning.models.wd_tagger import (KAOMOJIS,
                                               get_tags_to_exclude)
-from utils.enums import CaptionDevice, FrameAggregation
+from utils.enums import FrameAggregation
 from utils.video import DEFAULT_MAX_VIDEO_FRAMES
 
 
@@ -180,15 +180,14 @@ class PixaiTagger(AutoCaptioningModel):
 
     def get_captioning_message(self, are_multiple_images_selected: bool,
                                captioning_start_datetime: datetime) -> str:
-        device_str = ('GPU' if (self.device_setting == CaptionDevice.GPU
-                       and torch.cuda.is_available()) else 'CPU')
+        device_description = self.get_device_description()
         if are_multiple_images_selected:
             captioning_start_datetime_string = (
                 self.get_captioning_start_datetime_string(
                     captioning_start_datetime))
-            return (f'Generating tags... (device: {device_str}, start time: '
-                    f'{captioning_start_datetime_string})')
-        return f'Generating tags... (device: {device_str})'
+            return (f'Generating tags... (device: {device_description}, '
+                    f'start time: {captioning_start_datetime_string})')
+        return f'Generating tags... (device: {device_description})'
 
     def preprocess_frame(self, pil_image: PilImage) -> np.ndarray:
         """Convert a single PIL frame to the normalized CHW array expected

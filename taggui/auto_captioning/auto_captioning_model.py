@@ -149,8 +149,7 @@ class AutoCaptioningModel:
         # Only GPUs support 4-bit quantization.
         self.load_in_4_bit = self.load_in_4_bit and self.device.type == 'cuda'
         if (model and self.thread_parent.model_id == self.model_id
-                and (self.thread_parent.model_device_type
-                     == self.device.type)
+                and (self.thread_parent.model_device == str(self.device))
                 and (self.thread_parent.is_model_loaded_in_4_bit
                      == self.load_in_4_bit)):
             self.processor = processor
@@ -172,7 +171,7 @@ class AutoCaptioningModel:
         self.model = self.get_model()
         self.thread_parent.model = self.model
         self.thread_parent.model_id = self.model_id
-        self.thread_parent.model_device_type = self.device.type
+        self.thread_parent.model_device = str(self.device)
         self.thread_parent.is_model_loaded_in_4_bit = self.load_in_4_bit
 
     def monkey_patch_after_loading(self):
@@ -183,15 +182,22 @@ class AutoCaptioningModel:
             captioning_start_datetime: datetime) -> str:
         return captioning_start_datetime.strftime('%Y-%m-%d %H:%M:%S')
 
+    def get_device_description(self) -> str:
+        if self.device.type == 'cuda' and torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(self.device)
+            return f'{self.device} ({gpu_name})'
+        return str(self.device)
+
     def get_captioning_message(self, are_multiple_images_selected: bool,
                                captioning_start_datetime: datetime) -> str:
+        device_description = self.get_device_description()
         if are_multiple_images_selected:
             captioning_start_datetime_string = (
                 self.get_captioning_start_datetime_string(
                     captioning_start_datetime))
-            return (f'Captioning... (device: {self.device}, start time: '
-                    f'{captioning_start_datetime_string})')
-        return f'Captioning... (device: {self.device})'
+            return (f'Captioning... (device: {device_description}, start '
+                    f'time: {captioning_start_datetime_string})')
+        return f'Captioning... (device: {device_description})'
 
     @staticmethod
     def get_default_prompt() -> str:
