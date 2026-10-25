@@ -1,11 +1,13 @@
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, QSize, Qt, Slot
-from PySide6.QtGui import QImageReader, QMovie, QPixmap, QResizeEvent
+from PySide6.QtGui import (QImage, QImageReader, QMovie, QPixmap,
+                           QResizeEvent)
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from models.proxy_image_list_model import ProxyImageListModel
 from utils.image import Image
+from utils.video import get_video_thumbnail, is_video_path
 
 
 class ImageLabel(QLabel):
@@ -45,6 +47,23 @@ class ImageLabel(QLabel):
                     movie.setScaledSize(scaled)
                 self.setMovie(movie)
                 movie.start()
+                return
+        if is_video_path(image_path):
+            # Videos are shown as a static frame taken partway into the
+            # video; QImageReader cannot read video files.
+            thumbnail = get_video_thumbnail(image_path, 1920)
+            if thumbnail is not None:
+                thumbnail = thumbnail.convert('RGB')
+                pixmap = QPixmap.fromImage(
+                    QImage(thumbnail.tobytes(), thumbnail.width,
+                           thumbnail.height, thumbnail.width * 3,
+                           QImage.Format.Format_RGB888).copy())
+                pixmap.setDevicePixelRatio(self.devicePixelRatio())
+                pixmap = pixmap.scaled(
+                    self.size() * pixmap.devicePixelRatio(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
+                self.setPixmap(pixmap)
                 return
         image_reader = QImageReader(str(image_path))
         # Rotate the image according to the orientation tag.

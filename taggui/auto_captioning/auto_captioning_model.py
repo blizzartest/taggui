@@ -5,7 +5,7 @@ from datetime import datetime
 
 import numpy as np
 import torch
-from PIL import Image as PilImage
+from PIL import Image as PilImage, UnidentifiedImageError
 from PIL.ImageOps import exif_transpose
 
 # Double the decompression bomb pixel limit so high-resolution images can
@@ -18,6 +18,8 @@ from transformers.utils.import_utils import is_torch_bf16_gpu_available
 import auto_captioning.captioning_thread as captioning_thread
 from utils.enums import CaptionDevice
 from utils.image import Image
+from utils.video import (DEFAULT_MAX_VIDEO_FRAMES, is_video_path,
+                         load_video_frames)
 
 
 def replace_template_variable(match: re.Match, image: Image) -> str:
@@ -216,16 +218,41 @@ class AutoCaptioningModel:
         return text
 
     def load_image(self, image: Image) -> PilImage:
+        # Videos cannot be opened by Pillow; take a single frame instead.
+        if is_video_path(image.path):
+            frames = load_video_frames(image.path, 1)
+            if not frames:
+                raise UnidentifiedImageError(
+                    f'Could not decode any frame of {image.path}')
+            return frames[0].convert(self.image_mode)
         pil_image = PilImage.open(image.path)
         # Rotate the image according to the orientation tag.
         pil_image = exif_transpose(pil_image)
         pil_image = pil_image.convert(self.image_mode)
         return pil_image
 
-    def load_frames(self, image: Image, frame_count: int) -> list[PilImage]:
+    def load_frames(self, image: Image, frame_count: int,
+                    frames_per_interval: int | None = None,
+                    interval_seconds: float | None = None,
+                    max_frames: int = DEFAULT_MAX_VIDEO_FRAMES
+                    ) -> list[PilImage]:
         """Load up to `frame_count` evenly-spaced frames from an animated
-        image (GIF or WebP). Falls back to a single frame for static
-        images."""
+        image (GIF or WebP) or a video. Falls back to a single frame for
+        static images.
+
+        For videos, `frames_per_interval` and `interval_seconds` scale the
+        frame count with the video duration (e.g. 12 frames per 5 seconds),
+        and `max_frames` caps the number of extracted frames (0 means no
+        cap). They have no effect on animated images."""
+        if is_video_path(image.path):
+            frames = load_video_frames(image.path, frame_count,
+                                       frames_per_interval=frames_per_interval,
+                                       interval_seconds=interval_seconds,
+                                       max_frames=max_frames)
+            if not frames:
+                raise UnidentifiedImageError(
+                    f'Could not decode any frame of {image.path}')
+            return [frame.convert(self.image_mode) for frame in frames]
         pil_image = PilImage.open(image.path)
         if not getattr(pil_image, 'is_animated', False):
             pil_image = exif_transpose(pil_image)
