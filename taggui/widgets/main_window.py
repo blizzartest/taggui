@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import (QKeyCombination, QModelIndex, QTimer, QUrl, Qt,
                             Slot)
 from PySide6.QtGui import (QAction, QCloseEvent, QDesktopServices, QIcon,
-                           QKeySequence, QPixmap, QShortcut)
+                           QKeyEvent, QKeySequence, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QApplication, QFileDialog, QMainWindow,
                                QMessageBox, QStackedWidget, QVBoxLayout,
                                QWidget)
@@ -202,6 +202,16 @@ class MainWindow(QMainWindow):
             self.image_list.jump_to_first_untagged_image)
         self.restore()
         self.image_tags_editor.tag_input_box.setFocus()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        # Toggle video playback with Space. Key presses that reach the main
+        # window were not consumed by the focused widget, so this does not
+        # interfere with typing spaces in text boxes or with buttons.
+        if (event.key() == Qt.Key.Key_Space
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+            self.image_viewer.video_player.toggle_play_pause()
+            return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event: QCloseEvent):
         """Save the window geometry and state before closing."""

@@ -3,11 +3,13 @@ from pathlib import Path
 from PySide6.QtCore import QModelIndex, QSize, Qt, Slot
 from PySide6.QtGui import (QImage, QImageReader, QMovie, QPixmap,
                            QResizeEvent)
-from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QLabel, QSizePolicy, QStackedWidget,
+                               QVBoxLayout, QWidget)
 
 from models.proxy_image_list_model import ProxyImageListModel
 from utils.image import Image
 from utils.video import get_video_thumbnail, is_video_path
+from widgets.video_player import VideoPlayerWidget
 
 
 class ImageLabel(QLabel):
@@ -78,14 +80,33 @@ class ImageLabel(QLabel):
 
 
 class ImageViewer(QWidget):
+    """Shows the selected image, or a video player for video files."""
+
     def __init__(self, proxy_image_list_model: ProxyImageListModel):
         super().__init__()
         self.proxy_image_list_model = proxy_image_list_model
         self.image_label = ImageLabel()
-        QVBoxLayout(self).addWidget(self.image_label)
+        self.video_player = VideoPlayerWidget()
+        self.stacked_widget = QStackedWidget()
+        self.stacked_widget.addWidget(self.image_label)
+        self.stacked_widget.addWidget(self.video_player)
+        QVBoxLayout(self).addWidget(self.stacked_widget)
 
     @Slot()
     def load_image(self, proxy_image_index: QModelIndex):
+        # Clearing the selection (e.g. when reloading a directory) emits
+        # currentChanged with an invalid index; keep showing the current
+        # image in that case.
+        if not proxy_image_index.isValid():
+            return
         image: Image = self.proxy_image_list_model.data(
             proxy_image_index, Qt.ItemDataRole.UserRole)
+        if is_video_path(image.path) and self.video_player.load_video(
+                image.path):
+            self.stacked_widget.setCurrentWidget(self.video_player)
+            return
+        # Images, and videos that the player cannot decode, are shown as a
+        # static image (for videos, a frame taken partway into the video).
+        self.video_player.unload_video()
+        self.stacked_widget.setCurrentWidget(self.image_label)
         self.image_label.load_image(image.path)

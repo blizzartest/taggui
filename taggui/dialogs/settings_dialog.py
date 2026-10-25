@@ -106,6 +106,12 @@ class SettingsDialog(QDialog):
                               Qt.AlignmentFlag.AlignLeft)
         grid_layout.addWidget(models_directory_button, 8, 1,
                               Qt.AlignmentFlag.AlignLeft)
+        video_autoplay_check_box = SettingsBigCheckBox(
+            key='video_autoplay', default=DEFAULT_SETTINGS['video_autoplay'])
+        grid_layout.addWidget(QLabel('Autoplay videos when selected'), 9, 0,
+                              Qt.AlignmentFlag.AlignRight)
+        grid_layout.addWidget(video_autoplay_check_box, 9, 1,
+                              Qt.AlignmentFlag.AlignLeft)
         layout.addLayout(grid_layout)
 
         # Prevent the grid layout from moving to the center when the warning

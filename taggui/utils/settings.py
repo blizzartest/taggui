@@ -5,9 +5,10 @@ DEFAULT_SETTINGS = {
     'font_size': 16,
     # Common image formats that are supported in PySide6, plus video formats
     # that are decoded with imageio-ffmpeg.
-    'image_list_file_formats': ('bmp, gif, jpg, jpeg, mp4, mov, png, tif, '
-                               'tiff, webm'),
+    'image_list_file_formats': ('avi, bmp, gif, jpg, jpeg, mkv, mov, mp4, '
+                               'png, tif, tiff, webm'),
     'image_list_image_width': 200,
+    'video_autoplay': False,
     'image_list_view_mode': 'List',
     'tag_separator': ',',
     'insert_space_after_tag_separator': True,

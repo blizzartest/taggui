@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import queue
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from PIL import Image as PilImage
@@ -198,3 +200,175 @@ def get_video_thumbnail(
         print(f'Failed to cache the thumbnail of {video_path}: '
               f'{exception}', file=sys.stderr)
     return thumbnail
+
+
+# Maximum number of decoded frames the playback decoder keeps buffered
+# ahead of the display position. The frames are scaled to the display width,
+# so the buffer stays small even for long videos.
+PLAYBACK_FRAME_BUFFER_SIZE = 8
+
+# Sentinel put into the frame queue when decoding has finished or failed.
+_DECODE_END = object()
+
+
+class VideoReader:
+    """Sequential video reader for playback, backed by imageio-ffmpeg.
+
+    Decoding happens on a background thread: the decoder reads frames one
+    after another (which is much faster than random-access seeks) and puts
+    them into a bounded queue, from which the GUI thread takes frames in
+    display order. Frames are scaled to `display_width` while decoding so
+    that the buffer stays small and the GUI thread never has to scale.
+
+    The reader's public `get_data(index)` does the seeking: imageio's
+    ffmpeg plugin seeks with `-ss` for long stretches and then decodes
+    forward, so seeking backwards or by a large amount restarts the ffmpeg
+    subprocess. Random-access frame reads are therefore only used for
+    single frames while paused (e.g. scrubbing); during playback the
+    decoder always reads strictly sequentially.
+    """
+
+    def __init__(self, video_path: Path, display_width: int):
+        import imageio
+        _get_ffmpeg_exe()
+        self.video_path = video_path
+        self.display_width = max(1, display_width)
+        self.reader = imageio.get_reader(str(video_path))
+        metadata = self.reader.get_meta_data()
+        self.fps = metadata.get('fps') or 0
+        duration = metadata.get('duration') or 0
+        self.frame_count = max(1, int(self.fps * duration)) if self.fps else 0
+        self.duration = duration
+        self.width, self.height = metadata.get('size') or (0, 0)
+        self._frame_queue: queue.Queue = queue.Queue(
+            maxsize=PLAYBACK_FRAME_BUFFER_SIZE)
+        self._decoder_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._next_frame_index = 0
+        self._decoder_running = False
+        self._closed = False
+
+    def _scale_frame(self, pil_image: PilImage) -> PilImage:
+        if pil_image.width > self.display_width:
+            pil_image = pil_image.resize(
+                (self.display_width,
+                 int(self.display_width * pil_image.height / pil_image.width)),
+                resample=PilImage.Resampling.BICUBIC)
+        return pil_image
+
+    def _put(self, item) -> bool:
+        """Put an item into the frame queue, giving up when stopped.
+
+        The queue is bounded so that the decoder never runs far ahead of
+        the display; a blocking put would deadlock `stop`, which joins the
+        decoder thread, so the put times out periodically to check the stop
+        event.
+        """
+        while not self._stop_event.is_set():
+            try:
+                self._frame_queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _decode_frames(self, start_index: int):
+        """Decode frames sequentially, starting at `start_index`."""
+        try:
+            for index in range(start_index, self.frame_count):
+                if self._stop_event.is_set():
+                    break
+                try:
+                    frame = self.reader.get_data(index)
+                except (IndexError, RuntimeError):
+                    # The frame count estimate can overshoot for videos
+                    # with variable frame rates, and the ffmpeg pipe ends
+                    # with a RuntimeError at the end of the stream.
+                    break
+                pil_image = self._scale_frame(
+                    PilImage.fromarray(frame).convert('RGB'))
+                if not self._put((index, pil_image)):
+                    break
+        except Exception as exception:
+            print(f'Failed to decode frames from {self.video_path}: '
+                  f'{exception}', file=sys.stderr)
+        finally:
+            self._put(_DECODE_END)
+
+    def start(self):
+        """Start the background decoder at the current position."""
+        if self._decoder_running:
+            return
+        self._stop_event.clear()
+        self._decoder_running = True
+        self._decoder_thread = threading.Thread(
+            target=self._decode_frames,
+            args=(self._next_frame_index,), daemon=True)
+        self._decoder_thread.start()
+
+    def stop(self):
+        """Stop the background decoder and discard buffered frames."""
+        self._stop_event.set()
+        if self._decoder_thread is not None:
+            self._decoder_thread.join()
+            self._decoder_thread = None
+        self._decoder_running = False
+        while True:
+            try:
+                self._frame_queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def poll_frame(self) -> tuple[int, PilImage] | None | bool:
+        """Get the next frame for display without blocking.
+
+        Returns a (frame_index, image) tuple, None when the end of the
+        video has been reached or decoding failed, or False when no frame
+        is ready yet (the caller should skip this display update).
+        """
+        try:
+            item = self._frame_queue.get_nowait()
+        except queue.Empty:
+            return False
+        if item is _DECODE_END:
+            return None
+        index, image = item
+        self._next_frame_index = index + 1
+        return index, image
+
+    def seek(self, frame_index: int):
+        """Set the position at which playback resumes and stop the decoder.
+
+        The next `start` call resumes decoding at `frame_index`. Seeking is
+        done by the imageio ffmpeg plugin on the next read: it seeks to the
+        nearest keyframe with `-ss` and decodes forward to the exact frame.
+        """
+        frame_index = max(0, min(frame_index, self.frame_count - 1))
+        self.stop()
+        self._next_frame_index = frame_index
+
+    def get_frame(self, frame_index: int) -> PilImage | None:
+        """Decode a single frame, blocking until it is available.
+
+        Used to show a frame while paused (e.g. when scrubbing) without
+        keeping the background decoder running. The imageio ffmpeg plugin
+        seeks to the nearest keyframe and decodes forward to the exact
+        frame, so this is only fast enough for interactive use.
+        """
+        if self._closed:
+            return None
+        frame_index = max(0, min(frame_index, self.frame_count - 1))
+        try:
+            frame = self.reader.get_data(frame_index)
+        except Exception:
+            return None
+        return self._scale_frame(PilImage.fromarray(frame).convert('RGB'))
+
+    def close(self):
+        """Stop the decoder and release the video file."""
+        self.stop()
+        self._closed = True
+        try:
+            self.reader.close()
+        except Exception:
+            pass
