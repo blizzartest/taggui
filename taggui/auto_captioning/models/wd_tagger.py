@@ -13,7 +13,6 @@ from onnxruntime import InferenceSession
 
 import auto_captioning.captioning_thread as captioning_thread
 from auto_captioning.auto_captioning_model import AutoCaptioningModel
-from utils.enums import CaptionDevice
 from utils.image import Image
 
 KAOMOJIS = ['0_0', '(o)_(o)', '+_+', '+_-', '._.', '<o>_<o>', '<|>_<|>', '=_=',
@@ -30,7 +29,7 @@ def get_tags_to_exclude(tags_to_exclude_string: str) -> list[str]:
 
 
 class WdTaggerModel:
-    def __init__(self, model_id: str, device_setting: CaptionDevice):
+    def __init__(self, model_id: str, device: torch.device):
         model_path = Path(model_id) / 'model.onnx'
         if not model_path.is_file():
             model_path = huggingface_hub.hf_hub_download(model_id,
@@ -39,12 +38,16 @@ class WdTaggerModel:
         if not tags_path.is_file():
             tags_path = huggingface_hub.hf_hub_download(
                 model_id, filename='selected_tags.csv')
-        # Determine providers based on device setting
-        if device_setting == CaptionDevice.GPU and torch.cuda.is_available():
+        # Determine providers based on the device.
+        if device.type == 'cuda' and torch.cuda.is_available():
             providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            provider_options = [{'device_id': device.index},
+                                {'device_id': 0}]
         else:
             providers = ['CPUExecutionProvider']
-        self.inference_session = InferenceSession(model_path, providers=providers)
+            provider_options = None
+        self.inference_session = InferenceSession(
+            model_path, providers=providers, provider_options=provider_options)
         self.tags = []
         self.rating_tags_indices = []
         self.general_tags_indices = []
@@ -128,19 +131,18 @@ class WdTagger(AutoCaptioningModel):
         return None
 
     def get_model(self):
-        return WdTaggerModel(self.model_id, self.device_setting)
+        return WdTaggerModel(self.model_id, self.device)
 
     def get_captioning_message(self, are_multiple_images_selected: bool,
                                captioning_start_datetime: datetime) -> str:
-        device_str = ('GPU' if (self.device_setting == CaptionDevice.GPU
-                       and torch.cuda.is_available()) else 'CPU')
+        device_description = self.get_device_description()
         if are_multiple_images_selected:
             captioning_start_datetime_string = (
                 self.get_captioning_start_datetime_string(
                     captioning_start_datetime))
-            return (f'Generating tags... (device: {device_str}, start time: '
-                    f'{captioning_start_datetime_string})')
-        return f'Generating tags... (device: {device_str})'
+            return (f'Generating tags... (device: {device_description}, '
+                    f'start time: {captioning_start_datetime_string})')
+        return f'Generating tags... (device: {device_description})'
 
     def get_model_inputs(self, image_prompt: str, image: Image) -> np.ndarray:
         pil_image = self.load_image(image)
