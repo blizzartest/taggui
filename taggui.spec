@@ -1,16 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
 import imageio_ffmpeg
 
 # Bundle the ffmpeg binary that imageio-ffmpeg uses to decode videos.
 ffmpeg_binary = imageio_ffmpeg.get_ffmpeg_exe()
 
 datas = [('clip-vit-base-patch32', 'clip-vit-base-patch32'),
-         ('images/icon.ico', 'images')]
+         ('images/icon.ico', 'images'),
+         # Ship the imageio_ffmpeg binaries package so that
+         # importlib.resources can locate the bundled ffmpeg binary.
+         (os.path.join(os.path.dirname(imageio_ffmpeg.__file__), 'binaries'),
+          'imageio_ffmpeg/binaries')]
 hiddenimports = [
     'timm.models.layers',
     'imageio',
     'imageio_ffmpeg',
+    'imageio_ffmpeg.binaries',
 ]
 
 block_cipher = None

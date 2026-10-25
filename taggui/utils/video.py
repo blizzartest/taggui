@@ -8,6 +8,28 @@ from pathlib import Path
 
 from PIL import Image as PilImage
 
+
+def _get_ffmpeg_exe() -> str:
+    """Get the ffmpeg executable used for video decoding.
+
+    In a PyInstaller build the ffmpeg binary is bundled into the
+    `imageio_ffmpeg/binaries` directory (see taggui.spec), which is not the
+    location the imageio_ffmpeg package finds on its own. Point the
+    IMAGEIO_FFMPEG_EXE environment variable at it; imageio_ffmpeg checks that
+    variable first. In a normal installation this is a no-op and the bundled
+    binary of the imageio_ffmpeg package is used.
+    """
+    if 'IMAGEIO_FFMPEG_EXE' not in os.environ:
+        bundled_directory = (Path(sys.executable).parent / '_taggui'
+                             / 'imageio_ffmpeg' / 'binaries')
+        if bundled_directory.is_dir():
+            for binary in bundled_directory.iterdir():
+                if binary.name.startswith('ffmpeg'):
+                    os.environ['IMAGEIO_FFMPEG_EXE'] = str(binary)
+                    break
+    import imageio_ffmpeg
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
 # Video file formats that can be decoded with imageio-ffmpeg. Videos are
 # treated like animated images: frames are extracted for thumbnails and
 # multi-frame captioning.
@@ -75,6 +97,7 @@ def load_video_frames(video_path: Path, frame_count: int,
     try:
         import imageio
         import numpy as np
+        _get_ffmpeg_exe()
         reader = imageio.get_reader(str(video_path))
         try:
             metadata = reader.get_meta_data()
