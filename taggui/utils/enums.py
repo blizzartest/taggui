@@ -24,3 +24,8 @@ class CaptionPosition(str, Enum):
 class CaptionDevice(str, Enum):
     GPU = 'GPU if available'
     CPU = 'CPU'
+
+
+class FrameAggregation(str, Enum):
+    MEAN = 'Average probabilities'
+    MAX = 'Highest probability'

@@ -15,7 +15,7 @@ from auto_captioning.models_list import MODELS, get_model_class
 from dialogs.caption_multiple_images_dialog import CaptionMultipleImagesDialog
 from models.image_list_model import ImageListModel
 from utils.big_widgets import TallPushButton
-from utils.enums import CaptionDevice, CaptionPosition
+from utils.enums import CaptionDevice, CaptionPosition, FrameAggregation
 from utils.settings import DEFAULT_SETTINGS, get_settings, get_tag_separator
 from utils.settings_widgets import (FocusedScrollSettingsComboBox,
                                     FocusedScrollSettingsDoubleSpinBox,
@@ -193,6 +193,29 @@ class CaptionSettingsForm(QVBoxLayout):
                                          self.pixai_tags_to_exclude_text_edit)
         set_text_edit_height(self.pixai_tags_to_exclude_text_edit, 4)
         pixai_tagger_settings_form.addRow(pixai_tags_to_exclude_form)
+        self.pixai_multiframe_check_box = SettingsBigCheckBox(
+            key='pixai_tagger_multiframe_enabled', default=False,
+            text='Tag all frames of animated GIFs')
+        self.pixai_multiframe_frame_count_spin_box = (
+            FocusedScrollSettingsSpinBox(
+                key='pixai_tagger_multiframe_frame_count', default=5,
+                minimum=2, maximum=20))
+        self.pixai_multiframe_aggregation_combo_box = (
+            FocusedScrollSettingsComboBox(
+                key='pixai_tagger_multiframe_aggregation'))
+        self.pixai_multiframe_aggregation_combo_box.addItems(
+            list(FrameAggregation))
+        multiframe_layout = QHBoxLayout()
+        multiframe_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        multiframe_layout.setContentsMargins(0, 0, 0, 0)
+        multiframe_layout.addWidget(self.pixai_multiframe_check_box)
+        multiframe_layout.addWidget(QLabel('Frames:'))
+        multiframe_layout.addWidget(
+            self.pixai_multiframe_frame_count_spin_box)
+        multiframe_layout.addWidget(QLabel('Aggregation:'))
+        multiframe_layout.addWidget(
+            self.pixai_multiframe_aggregation_combo_box, stretch=1)
+        pixai_tagger_settings_form.addRow(multiframe_layout)
 
         self.toggle_advanced_settings_form_button = TallPushButton(
             'Show Advanced Settings')
@@ -411,6 +434,12 @@ class CaptionSettingsForm(QVBoxLayout):
                 'max_tags': self.pixai_max_tags_spin_box.value(),
                 'tags_to_exclude':
                     self.pixai_tags_to_exclude_text_edit.toPlainText(),
+                'multiframe_enabled':
+                    self.pixai_multiframe_check_box.isChecked(),
+                'multiframe_frame_count':
+                    self.pixai_multiframe_frame_count_spin_box.value(),
+                'multiframe_aggregation':
+                    self.pixai_multiframe_aggregation_combo_box.currentText(),
                 **{
                     f'include_{category}_tags': check_box.isChecked()
                     for category, check_box in

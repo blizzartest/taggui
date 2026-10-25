@@ -5,8 +5,8 @@ from operator import or_
 from pathlib import Path
 
 from PySide6.QtCore import (QFile, QItemSelection, QItemSelectionModel,
-                            QItemSelectionRange, QModelIndex, QSize, QUrl, Qt,
-                            Signal, Slot)
+                            QItemSelectionRange, QModelIndex, QSize, Qt,
+                            QTimer, QUrl, Signal, Slot)
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDockWidget,
                                QFileDialog, QHBoxLayout, QLabel, QLineEdit,
@@ -168,6 +168,7 @@ class ImageListView(QListView):
     tags_paste_requested = Signal(list, list)
     directory_reload_requested = Signal()
     images_deleted = Signal(list)
+    visible_source_rows_changed = Signal(set)
 
     def __init__(self, parent, proxy_image_list_model: ProxyImageListModel,
                  tag_separator: str, image_width: int):
@@ -182,6 +183,17 @@ class ImageListView(QListView):
         self.item_delegate = ImageListItemDelegate(self)
         self.setItemDelegate(self.item_delegate)
         self.image_width = image_width
+        # Debounce timer for visibility updates so that rapid scrolling does
+        # not cause excessive play/pause calls. Must be created before
+        # set_view_mode() because set_view_mode() starts the timer.
+        self.visibility_timer = QTimer(self)
+        self.visibility_timer.setSingleShot(True)
+        self.visibility_timer.setInterval(100)
+        self.visibility_timer.timeout.connect(self.update_visible_rows)
+        self.verticalScrollBar().valueChanged.connect(
+            self.visibility_timer.start)
+        self.visible_source_rows_changed.connect(
+            self._on_visible_source_rows_changed)
         self.set_view_mode(ViewMode.LIST)
 
         invert_selection_action = self.addAction('Invert Selection')
@@ -275,6 +287,40 @@ class ImageListView(QListView):
             self.setResizeMode(QListView.ResizeMode.Fixed)
             self.setSpacing(0)
             self.setGridSize(QSize())
+        self.visibility_timer.start()
+
+    def _on_visible_source_rows_changed(self, source_rows: set[int]):
+        """Forward visibility changes to the source model so that it can
+        play/pause animated thumbnails."""
+        source_model = self.proxy_image_list_model.sourceModel()
+        if source_model is not None:
+            source_model.play_visible_thumbnail_movies(source_rows)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.visibility_timer.start()
+
+    def update_visible_rows(self):
+        """Compute the set of source rows that are currently visible (or
+        partially visible) in the viewport and emit the result."""
+        visible_source_rows = set()
+        viewport = self.viewport()
+        for proxy_row in range(self.proxy_image_list_model.rowCount()):
+            proxy_index = self.proxy_image_list_model.index(proxy_row, 0)
+            rect = self.visualRect(proxy_index)
+            if rect.bottom() >= 0 and rect.top() <= viewport.height():
+                source_index = self.proxy_image_list_model.mapToSource(
+                    proxy_index)
+                visible_source_rows.add(source_index.row())
+        self.visible_source_rows_changed.emit(visible_source_rows)
+
+    def scrollContentsBy(self, dx, dy):
+        super().scrollContentsBy(dx, dy)
+        self.visibility_timer.start()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.visibility_timer.start()
 
     @Slot()
     def invert_selection(self):

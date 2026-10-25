@@ -1,4 +1,5 @@
 from datetime import datetime
+import traceback
 from pathlib import Path
 from time import perf_counter
 
@@ -99,6 +100,8 @@ class CaptioningThread(QThread):
             are_multiple_images_selected, captioning_start_datetime)
         print(captioning_message)
         caption_position = self.caption_settings['caption_position']
+        captioned_count = 0
+        skipped_count = 0
         for i, image_index in enumerate(self.selected_image_indices):
             start_time = perf_counter()
             if self.is_canceled:
@@ -109,20 +112,30 @@ class CaptioningThread(QThread):
             image_prompt = model.get_image_prompt(image)
             try:
                 model_inputs = model.get_model_inputs(image_prompt, image)
+                caption, console_output_caption = model.generate_caption(
+                    model_inputs, image_prompt)
             except UnidentifiedImageError:
                 print(f'Skipping {image.path.name} because its file format is '
                       'not supported or it is a corrupted image.')
+                skipped_count += 1
                 continue
             except DecompressionBombError:
                 print(f'Skipping {image.path.name} because its pixel size '
                       'exceeds the decompression bomb limit.')
+                skipped_count += 1
                 continue
             except FileNotFoundError:
                 print(f'Skipping {image.path.name} because it could not be '
                       'found.')
+                skipped_count += 1
                 continue
-            caption, console_output_caption = model.generate_caption(
-                model_inputs, image_prompt)
+            except Exception:
+                print(f'Skipping {image.path.name} because an error occurred '
+                      f'while processing it:\n'
+                      f'{traceback.format_exc()}')
+                skipped_count += 1
+                continue
+            captioned_count += 1
             tags = add_caption_to_tags(image.tags, caption, caption_position)
             self.caption_generated.emit(image_index, caption, tags)
             if are_multiple_images_selected:
@@ -139,11 +152,15 @@ class CaptioningThread(QThread):
                                           - captioning_start_datetime)
                                          .total_seconds())
             average_captioning_duration = (total_captioning_duration /
-                                           selected_image_count)
-            print(f'Finished captioning {selected_image_count} images in '
-                  f'{format_duration(total_captioning_duration)} '
-                  f'({average_captioning_duration:.1f} s/image) at '
-                  f'{captioning_end_datetime.strftime("%Y-%m-%d %H:%M:%S")}.')
+                                           max(captioned_count, 1))
+            summary = (f'Finished captioning {captioned_count} of '
+                       f'{selected_image_count} images in '
+                       f'{format_duration(total_captioning_duration)} '
+                       f'({average_captioning_duration:.1f} s/image) at '
+                       f'{captioning_end_datetime.strftime("%Y-%m-%d %H:%M:%S")}.')
+            if skipped_count:
+                summary += f'\nSkipped {skipped_count} image(s) due to errors.'
+            print(summary)
 
     def run(self):
         try:
