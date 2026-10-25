@@ -5,7 +5,7 @@ from datetime import datetime
 
 import numpy as np
 import torch
-from PIL import Image as PilImage
+from PIL import Image as PilImage, UnidentifiedImageError
 from PIL.ImageOps import exif_transpose
 
 # Double the decompression bomb pixel limit so high-resolution images can
@@ -18,6 +18,7 @@ from transformers.utils.import_utils import is_torch_bf16_gpu_available
 import auto_captioning.captioning_thread as captioning_thread
 from utils.enums import CaptionDevice
 from utils.image import Image
+from utils.video import is_video_path, load_video_frames
 
 
 def replace_template_variable(match: re.Match, image: Image) -> str:
@@ -216,6 +217,13 @@ class AutoCaptioningModel:
         return text
 
     def load_image(self, image: Image) -> PilImage:
+        # Videos cannot be opened by Pillow; take a single frame instead.
+        if is_video_path(image.path):
+            frames = load_video_frames(image.path, 1)
+            if not frames:
+                raise UnidentifiedImageError(
+                    f'Could not decode any frame of {image.path}')
+            return frames[0].convert(self.image_mode)
         pil_image = PilImage.open(image.path)
         # Rotate the image according to the orientation tag.
         pil_image = exif_transpose(pil_image)
@@ -224,8 +232,14 @@ class AutoCaptioningModel:
 
     def load_frames(self, image: Image, frame_count: int) -> list[PilImage]:
         """Load up to `frame_count` evenly-spaced frames from an animated
-        image (GIF or WebP). Falls back to a single frame for static
-        images."""
+        image (GIF or WebP) or a video. Falls back to a single frame for
+        static images."""
+        if is_video_path(image.path):
+            frames = load_video_frames(image.path, frame_count)
+            if not frames:
+                raise UnidentifiedImageError(
+                    f'Could not decode any frame of {image.path}')
+            return [frame.convert(self.image_mode) for frame in frames]
         pil_image = PilImage.open(image.path)
         if not getattr(pil_image, 'is_animated', False):
             pil_image = exif_transpose(pil_image)

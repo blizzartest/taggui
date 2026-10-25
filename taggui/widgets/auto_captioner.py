@@ -195,7 +195,7 @@ class CaptionSettingsForm(QVBoxLayout):
         pixai_tagger_settings_form.addRow(pixai_tags_to_exclude_form)
         self.pixai_multiframe_check_box = SettingsBigCheckBox(
             key='pixai_tagger_multiframe_enabled', default=False,
-            text='Tag all frames of animated GIFs')
+            text='Tag multiple frames of GIFs and videos')
         self.pixai_multiframe_frame_count_spin_box = (
             FocusedScrollSettingsSpinBox(
                 key='pixai_tagger_multiframe_frame_count', default=5,

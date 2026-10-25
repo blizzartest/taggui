@@ -15,6 +15,8 @@ from PIL import Image as PilImage
 
 from utils.image import Image
 from utils.settings import DEFAULT_SETTINGS, get_settings
+from utils.video import (get_video_metadata, get_video_thumbnail,
+                         is_video_path)
 from utils.tag_store import (delete_tag_databases, get_tags_storage_mode,
                              load_tags_from_database,
                              migrate_txt_tags_to_database as migrate_db,
@@ -89,8 +91,12 @@ def load_image_metadata(image_path: Path, tag_separator: str,
     """
     dimensions = None
     try:
-        # Single-pass: get dimensions first
-        dimensions = imagesize.get(image_path)
+        # Videos are probed with imageio-ffmpeg; imagesize cannot read them.
+        if is_video_path(image_path):
+            dimensions = get_video_metadata(image_path)
+        else:
+            # Single-pass: get dimensions first
+            dimensions = imagesize.get(image_path)
 
         # Check EXIF orientation and rotate dimensions if necessary.
         # Formats that cannot carry EXIF metadata are skipped, and
@@ -108,7 +114,7 @@ def load_image_metadata(image_path: Path, tag_separator: str,
             except Exception as exception:
                 print(f'Failed to get Exif tags for {image_path}: '
                       f'{exception}', file=sys.stderr)
-    except (ValueError, OSError) as exception:
+    except Exception as exception:
         print(f'Failed to get dimensions for {image_path}: '
               f'{exception}', file=sys.stderr)
         dimensions = None
@@ -164,8 +170,10 @@ def txt_to_image_path(text_path: Path, tags_subfolder: str,
     
     # Determine which suffixes to try
     if image_suffixes is None:
-        # Default common image suffixes
-        image_suffixes = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp'}
+        # Default common image and video suffixes
+        image_suffixes = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif',
+                          '.tiff', '.webp', '.mp4', '.webm', '.mov', '.mkv',
+                          '.avi'}
     
     # Find the corresponding image file
     for suffix in image_suffixes:
@@ -278,6 +286,20 @@ class ImageListModel(QAbstractListModel):
         is used as the initial thumbnail and `is_animated` is True so that
         the caller can start a QMovie for playback."""
         is_animated = False
+        if is_video_path(image.path):
+            # Videos get a static thumbnail of a frame taken partway into
+            # the video; QImageReader cannot read video files.
+            thumbnail_image = get_video_thumbnail(
+                image.path, self.image_list_image_width)
+            if thumbnail_image is None:
+                return None, is_animated
+            # PilImage.toqpixmap requires PySide6 6.9+; convert through the
+            # buffer protocol instead so older versions keep working.
+            return (QImage(thumbnail_image.tobytes(), thumbnail_image.width,
+                           thumbnail_image.height,
+                           thumbnail_image.width * 3,
+                           QImage.Format.Format_RGB888).copy(),
+                    is_animated)
         if image.path.suffix.lower() == '.gif':
             try:
                 pil_image = PilImage.open(image.path)
