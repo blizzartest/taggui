@@ -15,8 +15,8 @@ from PIL import Image as PilImage
 
 from utils.image import Image
 from utils.settings import DEFAULT_SETTINGS, get_settings
-from utils.video import (get_video_metadata, get_video_thumbnail,
-                         is_video_path)
+from utils.video import (VIDEO_SUFFIXES, get_video_metadata,
+                         get_video_thumbnail, is_video_path)
 from utils.tag_store import (delete_tag_databases, get_tags_storage_mode,
                              load_tags_from_database,
                              migrate_txt_tags_to_database as migrate_db,
@@ -509,6 +509,11 @@ class ImageListModel(QAbstractListModel):
             if not suffix.startswith('.'):
                 suffix = '.' + suffix
             image_suffixes.add(suffix)
+        # Videos are always shown: their suffixes are recognized by
+        # is_video_path regardless of the user's file format setting, so
+        # adding them here keeps them listed even for users whose stored
+        # setting predates video support.
+        image_suffixes.update(VIDEO_SUFFIXES)
 
         tags_subfolder = settings.value(
             'tags_subfolder',
