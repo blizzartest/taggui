@@ -18,9 +18,11 @@ VIDEO_SUFFIXES = {'.mp4', '.webm', '.mov', '.mkv', '.avi'}
 # black frames at the start of a video are avoided.
 REPRESENTATIVE_FRAME_POSITION = 0.25
 
-# Hard cap on the number of frames extracted from a single video, so that
-# very long videos do not produce excessively large captioning batches.
-MAX_VIDEO_FRAMES = 60
+# Default cap on the number of frames extracted from a single video, so
+# that very long videos do not produce excessively large captioning
+# batches. Can be changed with the `max_frames` parameter of
+# `load_video_frames` (0 means no cap).
+DEFAULT_MAX_VIDEO_FRAMES = 60
 
 
 def is_video_path(path: Path) -> bool:
@@ -51,7 +53,9 @@ def get_video_metadata(video_path: Path) -> tuple[int, int] | None:
 def load_video_frames(video_path: Path, frame_count: int,
                       position: float = 0.0,
                       frames_per_interval: int | None = None,
-                      interval_seconds: float | None = None) -> list[PilImage]:
+                      interval_seconds: float | None = None,
+                      max_frames: int = DEFAULT_MAX_VIDEO_FRAMES
+                      ) -> list[PilImage]:
     """Load evenly-spaced frames from a video.
 
     `frame_count` is the number of frames to load. If `frames_per_interval`
@@ -59,7 +63,7 @@ def load_video_frames(video_path: Path, frame_count: int,
     of frames per `interval_seconds` of video and scaled with the actual
     duration, so that long videos are sampled more densely than short ones.
     The resulting count is clamped to the video's frame count and to
-    MAX_VIDEO_FRAMES.
+    `max_frames` (0 means no cap).
 
     `position` is used when only a single frame is requested (frame_count ==
     1) to select the frame as a fraction of the video duration, so that
@@ -84,8 +88,9 @@ def load_video_frames(video_path: Path, frame_count: int,
             if frames_per_interval and interval_seconds:
                 frame_count = int(round(
                     frames_per_interval * duration / interval_seconds))
-                frame_count = min(frame_count, total_frames,
-                                  MAX_VIDEO_FRAMES)
+                frame_count = min(frame_count, total_frames)
+                if max_frames > 0:
+                    frame_count = min(frame_count, max_frames)
             if frame_count <= 1:
                 frame_indices = [min(int(total_frames * position),
                                      total_frames - 1)]

@@ -23,6 +23,7 @@ from utils.settings_widgets import (FocusedScrollSettingsComboBox,
                                     SettingsBigCheckBox, SettingsLineEdit,
                                     SettingsPlainTextEdit)
 from utils.utils import pluralize
+from utils.video import DEFAULT_MAX_VIDEO_FRAMES
 from widgets.image_list import ImageList
 
 
@@ -235,6 +236,15 @@ class CaptionSettingsForm(QVBoxLayout):
         video_multiframe_layout.addWidget(
             self.pixai_multiframe_interval_seconds_spin_box)
         video_multiframe_layout.addWidget(QLabel('seconds'))
+        self.pixai_multiframe_video_max_frames_spin_box = (
+            FocusedScrollSettingsSpinBox(
+                key='pixai_tagger_multiframe_video_max_frames',
+                default=DEFAULT_MAX_VIDEO_FRAMES, minimum=0, maximum=9999))
+        self.pixai_multiframe_video_max_frames_spin_box.setSpecialValueText(
+            'Unlimited')
+        video_multiframe_layout.addWidget(QLabel('Max:'))
+        video_multiframe_layout.addWidget(
+            self.pixai_multiframe_video_max_frames_spin_box)
         pixai_tagger_settings_form.addRow(video_multiframe_layout)
 
         self.toggle_advanced_settings_form_button = TallPushButton(
@@ -462,6 +472,8 @@ class CaptionSettingsForm(QVBoxLayout):
                     self.pixai_multiframe_frames_per_interval_spin_box.value(),
                 'multiframe_interval_seconds':
                     (self.pixai_multiframe_interval_seconds_spin_box.value()),
+                'multiframe_video_max_frames':
+                    self.pixai_multiframe_video_max_frames_spin_box.value(),
                 'multiframe_aggregation':
                     self.pixai_multiframe_aggregation_combo_box.currentText(),
                 **{
