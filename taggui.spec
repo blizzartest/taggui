@@ -15,7 +15,6 @@ datas = [('clip-vit-base-patch32', 'clip-vit-base-patch32'),
           'imageio_ffmpeg/binaries')]
 hiddenimports = [
     'timm.models.layers',
-    'imageio',
     'imageio_ffmpeg',
     'imageio_ffmpeg.binaries',
 ]

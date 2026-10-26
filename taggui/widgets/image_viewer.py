@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 from models.proxy_image_list_model import ProxyImageListModel
 from utils.image import Image
 from utils.video import get_video_thumbnail, is_video_path
+from widgets.video_player import VideoPlayer
 
 
 class ImageLabel(QLabel):
@@ -25,6 +26,16 @@ class ImageLabel(QLabel):
         """Reload the image whenever the label is resized."""
         if self.image_path:
             self.load_image(self.image_path)
+
+    def set_frame_pixmap(self, image: QImage):
+        """Show a video frame from the player, scaled to fit the label."""
+        pixmap = QPixmap.fromImage(image)
+        pixmap.setDevicePixelRatio(self.devicePixelRatio())
+        pixmap = pixmap.scaled(
+            self.size() * pixmap.devicePixelRatio(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+        self.setPixmap(pixmap)
 
     def load_image(self, image_path: Path):
         self.image_path = image_path
@@ -49,21 +60,17 @@ class ImageLabel(QLabel):
                 movie.start()
                 return
         if is_video_path(image_path):
-            # Videos are shown as a static frame taken partway into the
-            # video; QImageReader cannot read video files.
+            # Videos are handled by the video player, which replaces this
+            # label's static content once the first frame is decoded.
+            # Until then, show a thumbnail so the user is not left with a
+            # blank viewer while ffmpeg starts up.
             thumbnail = get_video_thumbnail(image_path, 1920)
             if thumbnail is not None:
                 thumbnail = thumbnail.convert('RGB')
-                pixmap = QPixmap.fromImage(
-                    QImage(thumbnail.tobytes(), thumbnail.width,
-                           thumbnail.height, thumbnail.width * 3,
-                           QImage.Format.Format_RGB888).copy())
-                pixmap.setDevicePixelRatio(self.devicePixelRatio())
-                pixmap = pixmap.scaled(
-                    self.size() * pixmap.devicePixelRatio(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation)
-                self.setPixmap(pixmap)
+                image = QImage(thumbnail.tobytes(), thumbnail.width,
+                               thumbnail.height, thumbnail.width * 3,
+                               QImage.Format.Format_RGB888).copy()
+                self.set_frame_pixmap(image)
                 return
         image_reader = QImageReader(str(image_path))
         # Rotate the image according to the orientation tag.
@@ -82,10 +89,24 @@ class ImageViewer(QWidget):
         super().__init__()
         self.proxy_image_list_model = proxy_image_list_model
         self.image_label = ImageLabel()
-        QVBoxLayout(self).addWidget(self.image_label)
+        self.video_player = VideoPlayer()
+        self.video_player.frame_changed.connect(
+            self.image_label.set_frame_pixmap)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.image_label)
+        layout.addWidget(self.video_player.control_bar)
 
     @Slot()
     def load_image(self, proxy_image_index: QModelIndex):
         image: Image = self.proxy_image_list_model.data(
             proxy_image_index, Qt.ItemDataRole.UserRole)
-        self.image_label.load_image(image.path)
+        if is_video_path(image.path):
+            # The player shows the static thumbnail first and replaces it
+            # with decoded frames as they arrive; the thumbnail is shown
+            # by the label so the viewer is never blank while the ffmpeg
+            # process starts up.
+            self.image_label.load_image(image.path)
+            self.video_player.load_video(image.path)
+        else:
+            self.video_player.close_video()
+            self.image_label.load_image(image.path)
