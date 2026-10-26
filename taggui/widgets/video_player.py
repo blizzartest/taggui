@@ -9,6 +9,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
                                QSlider, QSizePolicy, QWidget)
 
+from utils.settings import DEFAULT_SETTINGS, get_settings
 from utils.video import VideoFrameReader
 
 PLAYBACK_SPEEDS = (0.5, 1.0, 2.0, 4.0)
@@ -224,6 +225,7 @@ class VideoPlayer(QWidget):
         self.control_bar.hide()
         self._thread = None
         self._worker = None
+        self._autoplay_requested = False
 
     def load_video(self, video_path: Path):
         self.close_video()
@@ -257,6 +259,12 @@ class VideoPlayer(QWidget):
         self._thread = thread
         self._worker = worker
         thread.start()
+        # Autoplay takes effect once the first frame has been decoded, so
+        # that the viewer shows the static thumbnail first.
+        settings = get_settings()
+        self._autoplay_requested = settings.value(
+            'video_autoplay', defaultValue=DEFAULT_SETTINGS['video_autoplay'],
+            type=bool)
 
     def close_video(self):
         self.control_bar.hide()
@@ -285,6 +293,9 @@ class VideoPlayer(QWidget):
         self.control_bar.set_position(frame_index, fps)
         self.control_bar.show()
         self.frame_changed.emit(image)
+        if self._autoplay_requested:
+            self._autoplay_requested = False
+            self.control_bar.play_requested.emit(True)
 
     def _on_error(self, message: str):
         self.close_video()

@@ -17,7 +17,8 @@ DEFAULT_SETTINGS = {
     'tags_storage_mode': 'single_file',
     'load_mode': 'full',
     'image_list_sort_mode': 'Name',
-    'image_list_reverse_sort': False
+    'image_list_reverse_sort': False,
+    'video_autoplay': False
 }
 
 

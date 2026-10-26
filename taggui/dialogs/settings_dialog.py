@@ -33,6 +33,8 @@ class SettingsDialog(QDialog):
                               Qt.AlignmentFlag.AlignRight)
         grid_layout.addWidget(QLabel('Tags subfolder'), 7, 0,
                               Qt.AlignmentFlag.AlignRight)
+        grid_layout.addWidget(QLabel('Autoplay videos in the viewer'), 8, 0,
+                              Qt.AlignmentFlag.AlignRight)
 
         font_size_spin_box = SettingsSpinBox(
             key='font_size', default=DEFAULT_SETTINGS['font_size'],
@@ -104,7 +106,9 @@ class SettingsDialog(QDialog):
                               Qt.AlignmentFlag.AlignLeft)
         grid_layout.addWidget(tags_subfolder_line_edit, 7, 1,
                               Qt.AlignmentFlag.AlignLeft)
-        grid_layout.addWidget(models_directory_button, 8, 1,
+        grid_layout.addWidget(video_autoplay_check_box, 8, 1,
+                              Qt.AlignmentFlag.AlignLeft)
+        grid_layout.addWidget(models_directory_button, 9, 1,
                               Qt.AlignmentFlag.AlignLeft)
         layout.addLayout(grid_layout)
 
