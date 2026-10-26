@@ -13,6 +13,7 @@ from dialogs.batch_reorder_tags_dialog import BatchReorderTagsDialog
 from dialogs.export_metadata_dialog import ExportMetadataDialog
 from dialogs.find_and_replace_dialog import FindAndReplaceDialog
 from dialogs.settings_dialog import SettingsDialog
+from dialogs.video_player_dialog import VideoPlayerDialog
 from models.image_list_model import ImageListModel
 from models.image_tag_list_model import ImageTagListModel
 from models.proxy_image_list_model import ProxyImageListModel
@@ -23,6 +24,7 @@ from utils.image import Image
 from utils.key_press_forwarder import KeyPressForwarder
 from utils.settings import DEFAULT_SETTINGS, get_settings, get_tag_separator
 from utils.shortcut_remover import ShortcutRemover
+from utils.video import is_video_path
 from utils.utils import get_resource_path, pluralize
 from widgets.all_tags_editor import AllTagsEditor
 from widgets.auto_captioner import AutoCaptioner
@@ -315,6 +317,20 @@ class MainWindow(QMainWindow):
         export_dialog.exec()
 
     @Slot()
+    def show_video_player_dialog(self):
+        """Open the video player dialog for the currently selected video."""
+        proxy_image_index = self.image_list.list_view.currentIndex()
+        if not proxy_image_index.isValid():
+            return
+        image: Image = self.proxy_image_list_model.data(
+            proxy_image_index, Qt.ItemDataRole.UserRole)
+        if not is_video_path(image.path):
+            return
+        video_player_dialog = VideoPlayerDialog(parent=self,
+                                                video_path=image.path)
+        video_player_dialog.exec()
+
+    @Slot()
     def show_migrate_tags_dialog(self):
         """Ask whether to migrate the tags of the loaded directory from
         individual .txt caption files to the single tag database, and
@@ -386,6 +402,10 @@ class MainWindow(QMainWindow):
             [QKeySequence('Ctrl+Shift+L'), QKeySequence('F5')])
         self.reload_directory_action.triggered.connect(self.reload_directory)
         file_menu.addAction(self.reload_directory_action)
+        play_video_action = QAction('Play Video', parent=self)
+        play_video_action.setShortcut(QKeySequence('Ctrl+P'))
+        play_video_action.triggered.connect(self.show_video_player_dialog)
+        file_menu.addAction(play_video_action)
         settings_action = QAction('Settings...', parent=self)
         settings_action.setShortcut(QKeySequence('Ctrl+Alt+S'))
         settings_action.triggered.connect(self.show_settings_dialog)
