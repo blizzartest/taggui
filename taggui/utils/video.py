@@ -51,6 +51,74 @@ def is_video_path(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_SUFFIXES
 
 
+class VideoFrameReader:
+    """Sequential and seeking frame reader for a video.
+
+    Wraps an imageio reader with a frame position tracker: reading the
+    frame right after the last decoded one is a fast forward decode,
+    while reading an earlier frame reopens a fresh reader.
+    """
+
+    def __init__(self, video_path: Path):
+        import imageio
+        _get_ffmpeg_exe()
+        self.video_path = video_path
+        self._reader = imageio.get_reader(str(video_path))
+        self._next_index = 0
+        self._frame_count = 0
+        self.fps = 0.0
+        self.duration = 0.0
+        try:
+            metadata = self._reader.get_meta_data()
+            self.fps = metadata.get('fps') or 0.0
+            self.duration = metadata.get('duration') or 0.0
+            if self.fps and self.duration:
+                self._frame_count = max(1, int(self.fps * self.duration))
+        except Exception:
+            pass
+
+    @property
+    def frame_count(self) -> int:
+        return self._frame_count
+
+    def read_frame(self, index: int) -> PilImage | None:
+        """Decode the frame at `index`, or None if it cannot be decoded.
+
+        Forward reads from the current position decode intermediate
+        frames, which is much faster than seeking to a keyframe; reads at
+        or before the current position reopen the reader.
+        """
+        if self._frame_count:
+            index = max(0, min(index, self._frame_count - 1))
+        try:
+            # Decoding forward from the current position is much faster
+            # than seeking to a keyframe, but only for nearby frames; for
+            # long jumps, imageio's internal seek is faster.
+            if 0 <= index - self._next_index <= 30:
+                while self._next_index < index:
+                    self._reader.get_data(self._next_index)
+                    self._next_index += 1
+                frame = self._reader.get_data(self._next_index)
+                self._next_index += 1
+                return PilImage.fromarray(frame).convert('RGB')
+            frame = self._reader.get_data(index)
+            self._next_index = index + 1
+            return PilImage.fromarray(frame).convert('RGB')
+        except (IndexError, OSError, ValueError) as exception:
+            print(f'Failed to read frame {index} from {self.video_path}: '
+                  f'{exception}', file=sys.stderr)
+            return None
+
+    def close(self):
+        try:
+            self._reader.close()
+        except Exception:
+            pass
+
+    def __del__(self):
+        self.close()
+
+
 def get_video_metadata(video_path: Path) -> tuple[int, int] | None:
     """Get the (width, height) of a video without decoding any frames.
 
