@@ -101,6 +101,10 @@ class ImageViewer(QWidget):
         image: Image = self.proxy_image_list_model.data(
             proxy_image_index, Qt.ItemDataRole.UserRole)
         if is_video_path(image.path):
+            # The player shows the static thumbnail first and replaces it
+            # with decoded frames as they arrive; the thumbnail is shown
+            # by the label so the viewer is never blank while the ffmpeg
+            # process starts up.
             self.image_label.load_image(image.path)
             self.video_player.load_video(image.path)
         else:

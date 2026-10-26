@@ -35,9 +35,10 @@ class VideoDecodeWorker(QObject):
     frame_ready = Signal(QImage, int, int, float)
     error_occurred = Signal(str)
 
-    def __init__(self, video_path: Path):
+    def __init__(self, video_path: Path, reader: VideoFrameReader | None = None):
         super().__init__()
         self.video_path = video_path
+        self._reader = reader
         self._playing = False
         self._speed = 1.0
         self._current_index = -1
@@ -46,11 +47,12 @@ class VideoDecodeWorker(QObject):
 
     @Slot()
     def start(self):
-        try:
-            self._reader = VideoFrameReader(self.video_path)
-        except Exception as exception:
-            self.error_occurred.emit(str(exception))
-            return
+        if self._reader is None:
+            try:
+                self._reader = VideoFrameReader(self.video_path)
+            except Exception as exception:
+                self.error_occurred.emit(str(exception))
+                return
         if not self._reader.frame_count:
             self.error_occurred.emit('Could not read video metadata')
             self.close()
@@ -221,8 +223,25 @@ class VideoPlayer(QWidget):
 
     def load_video(self, video_path: Path):
         self.close_video()
+        # Open the reader and set up the control bar on the GUI thread:
+        # this also imports imageio for the first time here, which is
+        # safer than doing package discovery inside the worker thread
+        # (a known source of trouble in frozen builds). Reading only the
+        # metadata is fast, so this does not block the UI noticeably.
+        try:
+            reader = VideoFrameReader(video_path)
+        except Exception as exception:
+            self._on_error(str(exception))
+            return
+        if not reader.frame_count:
+            reader.close()
+            self._on_error('Could not read video metadata')
+            return
+        self.control_bar.set_range(reader.frame_count)
+        self.control_bar.set_position(0, reader.fps)
+        self.control_bar.show()
         thread = QThread()
-        worker = VideoDecodeWorker(video_path)
+        worker = VideoDecodeWorker(video_path, reader)
         worker.moveToThread(thread)
         thread.started.connect(worker.start)
         worker.frame_ready.connect(self._on_frame_ready)
@@ -264,5 +283,6 @@ class VideoPlayer(QWidget):
 
     def _on_error(self, message: str):
         self.close_video()
-        print(f'Failed to play video: {message}', file=sys.stderr)
+        if sys.stderr is not None:
+            print(f'Failed to play video: {message}', file=sys.stderr)
         self.error_occurred.emit(message)

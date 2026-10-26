@@ -51,6 +51,17 @@ def is_video_path(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_SUFFIXES
 
 
+def _log_error(message: str):
+    """Print an error message, tolerating a missing stderr.
+
+    In windowed (console-less) frozen builds, sys.stderr can be None;
+    printing to it would raise inside Qt slots, where the exception is
+    silently swallowed and aborts the rest of the slot.
+    """
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+
+
 class VideoFrameReader:
     """Sequential and seeking frame reader for a video.
 
@@ -105,8 +116,8 @@ class VideoFrameReader:
             self._next_index = index + 1
             return PilImage.fromarray(frame).convert('RGB')
         except (IndexError, OSError, ValueError) as exception:
-            print(f'Failed to read frame {index} from {self.video_path}: '
-                  f'{exception}', file=sys.stderr)
+            _log_error(f'Failed to read frame {index} from '
+                       f'{self.video_path}: {exception}')
             return None
 
     def close(self):
@@ -135,8 +146,8 @@ def get_video_metadata(video_path: Path) -> tuple[int, int] | None:
         if size:
             return size[0], size[1]
     except Exception as exception:
-        print(f'Failed to get video metadata for {video_path}: '
-              f'{exception}', file=sys.stderr)
+        _log_error(f'Failed to get video metadata for {video_path}: '
+                   f'{exception}')
     return None
 
 
@@ -206,8 +217,8 @@ def load_video_frames(video_path: Path, frame_count: int,
         finally:
             reader.close()
     except Exception as exception:
-        print(f'Failed to load frames from {video_path}: '
-              f'{exception}', file=sys.stderr)
+        _log_error(f'Failed to load frames from {video_path}: '
+                   f'{exception}')
         return []
 
 
@@ -263,6 +274,6 @@ def get_video_thumbnail(
         thumbnail.save(temporary_path, format='JPEG', quality=85)
         os.replace(temporary_path, cache_path)
     except OSError as exception:
-        print(f'Failed to cache the thumbnail of {video_path}: '
-              f'{exception}', file=sys.stderr)
+        _log_error(f'Failed to cache the thumbnail of {video_path}: '
+                   f'{exception}')
     return thumbnail
