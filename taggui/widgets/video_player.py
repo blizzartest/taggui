@@ -33,6 +33,7 @@ class VideoDecodeWorker(QObject):
     """
 
     frame_ready = Signal(QImage, int, int, float)
+    playing_changed = Signal(bool)
     error_occurred = Signal(str)
 
     def __init__(self, video_path: Path, reader: VideoFrameReader | None = None):
@@ -84,7 +85,9 @@ class VideoDecodeWorker(QObject):
             self.pause()
 
     def pause(self):
-        self._playing = False
+        if self._playing:
+            self._playing = False
+            self.playing_changed.emit(False)
         if self._timer is not None:
             self._timer.stop()
 
@@ -104,7 +107,9 @@ class VideoDecodeWorker(QObject):
     def _start_timer(self):
         if self._timer is None or self._reader is None:
             return
-        self._playing = True
+        if not self._playing:
+            self._playing = True
+            self.playing_changed.emit(True)
         fps = self._reader.fps or 24
         interval = max(10, int(1000 / (fps * self._speed)))
         self._timer.start(interval)
@@ -133,6 +138,7 @@ class VideoPlayerBar(QWidget):
         self.play_button = QPushButton('Play')
         self.play_button.setFixedWidth(64)
         self.play_button.clicked.connect(self._toggle_play)
+        self.play_requested.connect(self.set_playing)
 
         self.step_back_button = QPushButton('⏮')
         self.step_back_button.setFixedWidth(36)
@@ -190,9 +196,7 @@ class VideoPlayerBar(QWidget):
             f'{format_time(position)} / {format_time(duration)}')
 
     def _toggle_play(self):
-        will_play = self.play_button.text() == 'Play'
-        self.set_playing(will_play)
-        self.play_requested.emit(will_play)
+        self.play_requested.emit(self.play_button.text() == 'Play')
 
     def _slider_value_changed(self, value: int):
         if not self._suppress_slider_signals:
@@ -224,7 +228,7 @@ class VideoPlayer(QWidget):
     def load_video(self, video_path: Path):
         self.close_video()
         # Open the reader and set up the control bar on the GUI thread:
-        # this also imports imageio for the first time here, which is
+        # this also opens the ffmpeg decoder for the first time here,
         # safer than doing package discovery inside the worker thread
         # (a known source of trouble in frozen builds). Reading only the
         # metadata is fast, so this does not block the UI noticeably.
@@ -245,6 +249,7 @@ class VideoPlayer(QWidget):
         worker.moveToThread(thread)
         thread.started.connect(worker.start)
         worker.frame_ready.connect(self._on_frame_ready)
+        worker.playing_changed.connect(self.control_bar.set_playing)
         worker.error_occurred.connect(self._on_error)
         self.control_bar.play_requested.connect(worker.set_playing)
         self.control_bar.position_changed.connect(worker.read_frame)

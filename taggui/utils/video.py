@@ -6,6 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import numpy as np
 from PIL import Image as PilImage
 
 
@@ -30,6 +31,18 @@ def _get_ffmpeg_exe() -> str:
     import imageio_ffmpeg
     return imageio_ffmpeg.get_ffmpeg_exe()
 
+
+def _log_error(message: str):
+    """Print an error message, tolerating a missing stderr.
+
+    In windowed (console-less) frozen builds, sys.stderr can be None;
+    printing to it would raise inside Qt slots, where the exception is
+    silently swallowed and aborts the rest of the slot.
+    """
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+
+
 # Video file formats that can be decoded with imageio-ffmpeg. Videos are
 # treated like animated images: frames are extracted for thumbnails and
 # multi-frame captioning.
@@ -46,88 +59,42 @@ REPRESENTATIVE_FRAME_POSITION = 0.25
 # `load_video_frames` (0 means no cap).
 DEFAULT_MAX_VIDEO_FRAMES = 60
 
+# Decoding is done directly with imageio_ffmpeg.read_frames() instead of
+# the imageio package: imageio resolves its plugins through
+# importlib.metadata package discovery at import time, which does not
+# work in PyInstaller-frozen builds ("No package metadata was found for
+# imageio"). read_frames() shells out to the bundled ffmpeg binary and
+# has no such dependency.
+
 
 def is_video_path(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_SUFFIXES
 
 
-def _log_error(message: str):
-    """Print an error message, tolerating a missing stderr.
+def _read_frames(video_path: Path, seek_seconds: float = 0.0):
+    """Start an ffmpeg decode process for a video.
 
-    In windowed (console-less) frozen builds, sys.stderr can be None;
-    printing to it would raise inside Qt slots, where the exception is
-    silently swallowed and aborts the rest of the slot.
+    Returns (metadata, frame_generator). The generator yields raw RGB
+    bytes per frame; the caller must consume or close it. `seek_seconds`
+    is applied as an ffmpeg input seek, which is fast even for large
+    offsets.
     """
-    if sys.stderr is not None:
-        print(message, file=sys.stderr)
+    import imageio_ffmpeg
+    _get_ffmpeg_exe()
+    input_params = []
+    if seek_seconds > 0:
+        input_params = ['-ss', f'{seek_seconds:.6f}']
+    generator = imageio_ffmpeg.read_frames(
+        str(video_path), pix_fmt='rgb24', input_params=input_params)
+    metadata = next(generator)
+    return metadata, generator
 
 
-class VideoFrameReader:
-    """Sequential and seeking frame reader for a video.
-
-    Wraps an imageio reader with a frame position tracker: reading the
-    frame right after the last decoded one is a fast forward decode,
-    while reading an earlier frame reopens a fresh reader.
-    """
-
-    def __init__(self, video_path: Path):
-        import imageio
-        _get_ffmpeg_exe()
-        self.video_path = video_path
-        self._reader = imageio.get_reader(str(video_path))
-        self._next_index = 0
-        self._frame_count = 0
-        self.fps = 0.0
-        self.duration = 0.0
-        try:
-            metadata = self._reader.get_meta_data()
-            self.fps = metadata.get('fps') or 0.0
-            self.duration = metadata.get('duration') or 0.0
-            if self.fps and self.duration:
-                self._frame_count = max(1, int(self.fps * self.duration))
-        except Exception:
-            pass
-
-    @property
-    def frame_count(self) -> int:
-        return self._frame_count
-
-    def read_frame(self, index: int) -> PilImage | None:
-        """Decode the frame at `index`, or None if it cannot be decoded.
-
-        Forward reads from the current position decode intermediate
-        frames, which is much faster than seeking to a keyframe; reads at
-        or before the current position reopen the reader.
-        """
-        if self._frame_count:
-            index = max(0, min(index, self._frame_count - 1))
-        try:
-            # Decoding forward from the current position is much faster
-            # than seeking to a keyframe, but only for nearby frames; for
-            # long jumps, imageio's internal seek is faster.
-            if 0 <= index - self._next_index <= 30:
-                while self._next_index < index:
-                    self._reader.get_data(self._next_index)
-                    self._next_index += 1
-                frame = self._reader.get_data(self._next_index)
-                self._next_index += 1
-                return PilImage.fromarray(frame).convert('RGB')
-            frame = self._reader.get_data(index)
-            self._next_index = index + 1
-            return PilImage.fromarray(frame).convert('RGB')
-        except (IndexError, OSError, ValueError) as exception:
-            _log_error(f'Failed to read frame {index} from '
-                       f'{self.video_path}: {exception}')
-            return None
-
-    def close(self):
-        try:
-            self._reader.close()
-        except Exception:
-            pass
-
-    def __del__(self):
-        self.close()
+def _frame_to_pil_image(frame_bytes: bytes, size: tuple[int, int]) -> PilImage:
+    width, height = size
+    array = np.frombuffer(frame_bytes, dtype=np.uint8).reshape(
+        height, width, 3)
+    return PilImage.fromarray(array).convert('RGB')
 
 
 def get_video_metadata(video_path: Path) -> tuple[int, int] | None:
@@ -136,12 +103,8 @@ def get_video_metadata(video_path: Path) -> tuple[int, int] | None:
     Returns None if the video cannot be read.
     """
     try:
-        import imageio
-        reader = imageio.get_reader(str(video_path))
-        try:
-            metadata = reader.get_meta_data()
-        finally:
-            reader.close()
+        metadata, generator = _read_frames(video_path)
+        generator.close()
         size = metadata.get('size')
         if size:
             return size[0], size[1]
@@ -149,6 +112,89 @@ def get_video_metadata(video_path: Path) -> tuple[int, int] | None:
         _log_error(f'Failed to get video metadata for {video_path}: '
                    f'{exception}')
     return None
+
+
+class VideoFrameReader:
+    """Sequential and seeking frame reader for a video.
+
+    Frames are decoded with imageio_ffmpeg.read_frames(), running ffmpeg
+    as a subprocess. Decoding is sequential: reading the next frames
+    after the last decoded one is a fast forward read, while any seek
+    (forward jump or backward) starts a new ffmpeg process positioned
+    just before the target frame, which is fast because ffmpeg input
+    seeking jumps to the nearest keyframe.
+    """
+
+    def __init__(self, video_path: Path):
+        self.video_path = video_path
+        self._generator = None
+        self._next_index = 0
+        self._frame_count = 0
+        self.fps = 0.0
+        self.duration = 0.0
+        self._size = (0, 0)
+        self._open(0.0)
+
+    def _open(self, seek_seconds: float):
+        self._close_generator()
+        metadata, generator = _read_frames(self.video_path, seek_seconds)
+        self._generator = generator
+        self.fps = metadata.get('fps') or 0.0
+        self.duration = metadata.get('duration') or 0.0
+        size = metadata.get('size') or (0, 0)
+        self._size = (size[0], size[1])
+        if self.fps and self.duration:
+            self._frame_count = max(1, int(self.fps * self.duration))
+
+    @property
+    def frame_count(self) -> int:
+        return self._frame_count
+
+    def read_frame(self, index: int) -> PilImage | None:
+        """Decode the frame at `index`, or None if it cannot be decoded.
+
+        Sequential forward reads reuse the running ffmpeg process;
+        reading any earlier index, or jumping forward, restarts the
+        process with an input seek to just before the target frame.
+        """
+        if not self._frame_count:
+            return None
+        index = max(0, min(index, self._frame_count - 1))
+        try:
+            if index < self._next_index or index - self._next_index > 30:
+                # Restart with an input seek just before the target
+                # frame; ffmpeg seeks to the nearest keyframe, then
+                # decodes forward to the exact position.
+                self._open(index / self.fps if self.fps else 0.0)
+            while self._next_index < index:
+                next(self._generator)
+                self._next_index += 1
+            frame_bytes = next(self._generator)
+            self._next_index += 1
+            return _frame_to_pil_image(frame_bytes, self._size)
+        except StopIteration:
+            # The frame count estimate can overshoot for videos with
+            # variable frame rates.
+            self._frame_count = self._next_index
+            return None
+        except (OSError, ValueError) as exception:
+            _log_error(f'Failed to read frame {index} from '
+                       f'{self.video_path}: {exception}')
+            return None
+
+    def _close_generator(self):
+        if self._generator is not None:
+            try:
+                self._generator.close()
+            except Exception:
+                pass
+            self._generator = None
+
+    def close(self):
+        self._close_generator()
+
+    def __del__(self):
+        self.close()
 
 
 def load_video_frames(video_path: Path, frame_count: int,
@@ -174,22 +220,14 @@ def load_video_frames(video_path: Path, frame_count: int,
     Returns an empty list if the video cannot be decoded.
     """
     try:
-        import imageio
-        import numpy as np
-        _get_ffmpeg_exe()
-        reader = imageio.get_reader(str(video_path))
+        reader = VideoFrameReader(video_path)
         try:
-            metadata = reader.get_meta_data()
-            fps = metadata.get('fps') or 0
-            duration = metadata.get('duration') or 0
-            if not fps or not duration:
+            if not reader.frame_count:
                 return []
-            total_frames = int(fps * duration)
-            if total_frames < 1:
-                return []
+            total_frames = reader.frame_count
             if frames_per_interval and interval_seconds:
                 frame_count = int(round(
-                    frames_per_interval * duration / interval_seconds))
+                    frames_per_interval * reader.duration / interval_seconds))
                 frame_count = min(frame_count, total_frames)
                 if max_frames > 0:
                     frame_count = min(frame_count, max_frames)
@@ -197,28 +235,23 @@ def load_video_frames(video_path: Path, frame_count: int,
                 frame_indices = [min(int(total_frames * position),
                                      total_frames - 1)]
             else:
-                frame_indices = np.linspace(0, total_frames - 1, frame_count,
-                                            dtype=int)
+                frame_indices = np.linspace(0, total_frames - 1,
+                                            frame_count, dtype=int)
             frames = []
             # Sort the indices so that seeking always moves forward; this is
             # significantly faster than random-access seeks because the
             # decoder does not have to restart from a keyframe for every
             # frame.
             for index in sorted(int(i) for i in frame_indices):
-                try:
-                    frame = reader.get_data(index)
-                except IndexError:
-                    # The frame count estimate can overshoot for videos with
-                    # variable frame rates.
+                frame = reader.read_frame(index)
+                if frame is None:
                     continue
-                # imageio's ffmpeg reader returns RGB frames.
-                frames.append(PilImage.fromarray(frame).convert('RGB'))
+                frames.append(frame)
             return frames
         finally:
             reader.close()
     except Exception as exception:
-        _log_error(f'Failed to load frames from {video_path}: '
-                   f'{exception}')
+        _log_error(f'Failed to load frames from {video_path}: {exception}')
         return []
 
 
