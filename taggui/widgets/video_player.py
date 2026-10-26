@@ -3,8 +3,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import (QImage, QMetaObject, QObject, Qt, QThread,
-                           QTimer, Signal, Slot)
+from PySide6.QtCore import (QMetaObject, QObject, Qt, QThread, QTimer,
+                           Signal, Slot)
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
                                QSlider, QSizePolicy, QWidget)
 
