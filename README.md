@@ -18,6 +18,8 @@ models.
 - Advanced image list filtering
 - Sorting the image list by name, creation date, modification date, tag
   count, dimensions, aspect ratio, or randomly
+- Video player for skimming through videos (silent, with a seek bar;
+  `File` -> `Play Video` or `Ctrl+P`)
 ## Installation
 
 The easiest way to use the application is to download the latest release from
