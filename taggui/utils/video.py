@@ -46,7 +46,8 @@ def _log_error(message: str):
 # Video file formats that can be decoded with imageio-ffmpeg. Videos are
 # treated like animated images: frames are extracted for thumbnails and
 # multi-frame captioning.
-VIDEO_SUFFIXES = {'.mp4', '.webm', '.mov', '.mkv', '.avi'}
+VIDEO_SUFFIXES = {'.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.wmv',
+                  '.flv', '.mpg', '.mpeg', '.3gp'}
 
 # Fraction of the video duration at which a representative frame is taken
 # for thumbnails and single-frame captioning, so that intros, fades and

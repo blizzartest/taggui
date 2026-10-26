@@ -172,8 +172,8 @@ def txt_to_image_path(text_path: Path, tags_subfolder: str,
     if image_suffixes is None:
         # Default common image and video suffixes
         image_suffixes = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif',
-                          '.tiff', '.webp', '.mp4', '.webm', '.mov', '.mkv',
-                          '.avi'}
+                          '.tiff', '.webp', '.mp4', '.m4v', '.webm', '.mov',
+                          '.mkv', '.avi'}
     
     # Find the corresponding image file
     for suffix in image_suffixes:
