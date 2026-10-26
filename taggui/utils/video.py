@@ -134,12 +134,15 @@ class VideoFrameReader:
         self.fps = 0.0
         self.duration = 0.0
         self._size = (0, 0)
-        self._open(0.0)
+        self._open(0.0, 0)
 
-    def _open(self, seek_seconds: float):
+    def _open(self, seek_seconds: float, seek_index: int):
         self._close_generator()
         metadata, generator = _read_frames(self.video_path, seek_seconds)
         self._generator = generator
+        # The new stream starts at the seek position; the next frame the
+        # generator yields is the one at `seek_index`.
+        self._next_index = seek_index
         self.fps = metadata.get('fps') or 0.0
         self.duration = metadata.get('duration') or 0.0
         size = metadata.get('size') or (0, 0)
@@ -166,7 +169,7 @@ class VideoFrameReader:
                 # Restart with an input seek just before the target
                 # frame; ffmpeg seeks to the nearest keyframe, then
                 # decodes forward to the exact position.
-                self._open(index / self.fps if self.fps else 0.0)
+                self._open(index / self.fps if self.fps else 0.0, index)
             while self._next_index < index:
                 next(self._generator)
                 self._next_index += 1
