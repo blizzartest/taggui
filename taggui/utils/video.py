@@ -46,7 +46,8 @@ def _log_error(message: str):
 # Video file formats that can be decoded with imageio-ffmpeg. Videos are
 # treated like animated images: frames are extracted for thumbnails and
 # multi-frame captioning.
-VIDEO_SUFFIXES = {'.mp4', '.webm', '.mov', '.mkv', '.avi'}
+VIDEO_SUFFIXES = {'.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.wmv',
+                  '.flv', '.mpg', '.mpeg', '.3gp'}
 
 # Fraction of the video duration at which a representative frame is taken
 # for thumbnails and single-frame captioning, so that intros, fades and
@@ -133,12 +134,15 @@ class VideoFrameReader:
         self.fps = 0.0
         self.duration = 0.0
         self._size = (0, 0)
-        self._open(0.0)
+        self._open(0.0, 0)
 
-    def _open(self, seek_seconds: float):
+    def _open(self, seek_seconds: float, seek_index: int):
         self._close_generator()
         metadata, generator = _read_frames(self.video_path, seek_seconds)
         self._generator = generator
+        # The new stream starts at the seek position; the next frame the
+        # generator yields is the one at `seek_index`.
+        self._next_index = seek_index
         self.fps = metadata.get('fps') or 0.0
         self.duration = metadata.get('duration') or 0.0
         size = metadata.get('size') or (0, 0)
@@ -165,7 +169,7 @@ class VideoFrameReader:
                 # Restart with an input seek just before the target
                 # frame; ffmpeg seeks to the nearest keyframe, then
                 # decodes forward to the exact position.
-                self._open(index / self.fps if self.fps else 0.0)
+                self._open(index / self.fps if self.fps else 0.0, index)
             while self._next_index < index:
                 next(self._generator)
                 self._next_index += 1
