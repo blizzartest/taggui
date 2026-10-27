@@ -164,7 +164,17 @@ apply:
 - `path`: Images that contain the filter term in the full file path
     - `path:cat` will match images such as `C:\Users\cats\dog.jpg` or
       `/home/dogs/cat.jpg`.
+- `type`: Images that have the filter term as their file type (extension)
+    - The file type is the file extension without the leading dot, matched
+      case-insensitively. Wildcards are supported.
+    - `type:png` will match images such as `photo.png` or `IMG_001.PNG`.
+    - `type:jp*g` will match images such as `photo.jpg` or `photo.jpeg`.
 - `untagged`: Images that have no tags
+
+Images that have an entry in the tag database are always included in the
+image list, even if their file format is not in the configured file formats
+(`File` -> `Settings` -> `File formats`). This keeps the image list
+consistent between the `Full` and `Tags Only` load modes.
     - `untagged` will match images that do not have any tags.
 - You can also use a filter term with no prefix to filter for images that
   contain the term in either the caption or the file path.
@@ -231,6 +241,25 @@ For example, in `tag:cat AND (tag:orange OR tag:white)`, the `OR` will be
 evaluated first, matching images that have the tag `cat` and either the
 tag `orange` or the tag `white`.
 You can nest parentheses and operators to create arbitrarily complex filters.
+
+### Danbooru search syntax
+
+The filter box can be switched to Danbooru search syntax
+(`View` -> `Search Syntax` -> `Danbooru`), which offers a more compact
+notation for tag searches:
+
+- Terms are combined with `AND` by default: `blonde_hair blue_eyes` matches
+  images that have both tags.
+- `-` before a term excludes it: `-cat` matches images without the tag `cat`.
+- `~` before a term makes it disjunctive: `~cat ~dog` matches images that
+  have the tag `cat` or the tag `dog`.
+- `OR` combines groups of terms: `cat OR dog` matches images that have either
+  tag.
+- Parentheses group terms: `(cat OR dog) blonde_hair`.
+- `type:<ext>` filters by file type (extension), as in the default syntax:
+  `type:mp4` matches videos, `blonde_hair type:png` matches images with the
+  tag `blonde_hair` that are PNG files, and `-type:mp4` excludes videos.
+  Wildcards are supported (`type:jp*g`).
 </details>
 
 ## Controls

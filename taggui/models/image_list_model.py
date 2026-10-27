@@ -525,6 +525,12 @@ class ImageListModel(QAbstractListModel):
         self.build_tag_index(directory_path, image_suffixes, tags_subfolder,
                              image_paths, text_file_paths)
 
+        # Images with entries in the tag database may have a file format
+        # that is not in the configured image suffixes. Include them so
+        # that the image list is consistent between the load modes; the
+        # tag index in tags-only mode already contains them.
+        image_paths.update(self.tag_index)
+
         if self.load_mode == 'full':
             if self.tags_storage_mode == 'single_file':
                 # Tags come from the tag index (which is backed by the tag
