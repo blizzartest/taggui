@@ -164,6 +164,11 @@ apply:
 - `path`: Images that contain the filter term in the full file path
     - `path:cat` will match images such as `C:\Users\cats\dog.jpg` or
       `/home/dogs/cat.jpg`.
+- `type`: Images that have the filter term as their file type (extension)
+    - The file type is the file extension without the leading dot, matched
+      case-insensitively. Wildcards are supported.
+    - `type:png` will match images such as `photo.png` or `IMG_001.PNG`.
+    - `type:jp*g` will match images such as `photo.jpg` or `photo.jpeg`.
 - `untagged`: Images that have no tags
     - `untagged` will match images that do not have any tags.
 - You can also use a filter term with no prefix to filter for images that

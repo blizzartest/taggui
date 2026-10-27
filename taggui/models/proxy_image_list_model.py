@@ -209,6 +209,9 @@ class ProxyImageListModel(QSortFilterProxyModel):
             if filter_[0] == 'path':
                 path_matcher = get_filter_matcher(f'*{filter_[1]}*')
                 return path_matcher(str(image.path))
+            if filter_[0] == 'type':
+                type_matcher = get_filter_matcher(filter_[1].lower())
+                return type_matcher(image.path.suffix.lower().lstrip('.'))
         if filter_[1] == 'AND':
             return (self.does_image_match_filter(image, filter_[0])
                     and self.does_image_match_filter(image, filter_[2:]))
