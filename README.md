@@ -171,10 +171,11 @@ apply:
     - `type:jp*g` will match images such as `photo.jpg` or `photo.jpeg`.
 - `untagged`: Images that have no tags
 
-Images that have an entry in the tag database are always included in the
-image list, even if their file format is not in the configured file formats
-(`File` -> `Settings` -> `File formats`). This keeps the image list
-consistent between the `Full` and `Tags Only` load modes.
+The file formats of the image list are configurable in
+`File` -> `Settings` -> `File formats`. Only files with a listed format are
+loaded. If the stored setting still matches a previous default and new
+formats were added to the default (e.g. video formats), it is migrated to
+the current default automatically; customized values are left untouched.
     - `untagged` will match images that do not have any tags.
 - You can also use a filter term with no prefix to filter for images that
   contain the term in either the caption or the file path.

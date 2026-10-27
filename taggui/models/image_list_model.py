@@ -14,7 +14,8 @@ import imagesize
 from PIL import Image as PilImage
 
 from utils.image import Image
-from utils.settings import DEFAULT_SETTINGS, get_settings
+from utils.settings import (DEFAULT_SETTINGS, get_image_list_file_formats,
+                            get_settings)
 from utils.video import (get_video_metadata, get_video_thumbnail,
                          is_video_path)
 from utils.tag_store import (delete_tag_databases, get_tags_storage_mode,
@@ -500,9 +501,7 @@ class ImageListModel(QAbstractListModel):
         self.directory_path = directory_path
 
         settings = get_settings()
-        image_suffixes_string = settings.value(
-            'image_list_file_formats',
-            defaultValue=DEFAULT_SETTINGS['image_list_file_formats'], type=str)
+        image_suffixes_string = get_image_list_file_formats()
         image_suffixes = set()
         for suffix in image_suffixes_string.split(','):
             suffix = suffix.strip().lower()
@@ -524,12 +523,6 @@ class ImageListModel(QAbstractListModel):
             directory_path, image_suffixes)
         self.build_tag_index(directory_path, image_suffixes, tags_subfolder,
                              image_paths, text_file_paths)
-
-        # Images with entries in the tag database may have a file format
-        # that is not in the configured image suffixes. Include them so
-        # that the image list is consistent between the load modes; the
-        # tag index in tags-only mode already contains them.
-        image_paths.update(self.tag_index)
 
         if self.load_mode == 'full':
             if self.tags_storage_mode == 'single_file':

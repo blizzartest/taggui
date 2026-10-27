@@ -22,6 +22,29 @@ DEFAULT_SETTINGS = {
 }
 
 
+# Past default values of the image_list_file_formats setting. If the
+# stored setting still matches one of them, it is migrated to the
+# current default so that newly supported file formats are picked up.
+# Values that were customized away from a default are left untouched.
+LEGACY_IMAGE_LIST_FILE_FORMATS = [
+    ('bmp, gif, jpg, jpeg, png, tif, tiff, webp'),
+    ('bmp, gif, jpg, jpeg, mp4, mov, png, tif, tiff, webm'),
+]
+
+
+def get_image_list_file_formats() -> str:
+    """Return the configured image file formats, migrating a stored value
+    that still matches a previous default to the current default."""
+    settings = get_settings()
+    formats_string = settings.value(
+        'image_list_file_formats',
+        defaultValue=DEFAULT_SETTINGS['image_list_file_formats'], type=str)
+    if formats_string in LEGACY_IMAGE_LIST_FILE_FORMATS:
+        formats_string = DEFAULT_SETTINGS['image_list_file_formats']
+        settings.setValue('image_list_file_formats', formats_string)
+    return formats_string
+
+
 def get_settings() -> QSettings:
     settings = QSettings('taggui', 'taggui')
     return settings
