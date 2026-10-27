@@ -130,7 +130,13 @@ class _Parser:
                 raise DanbooruSearchError("Missing ')'")
             self.pos += 1
             return _apply_prefix(token[1], inner)
-        return _apply_prefix(token[1], ['tag', token[2]])
+        word = token[2]
+        lowercase_word = word.lower()
+        if lowercase_word.startswith('type:') and len(word) > 5:
+            filter_ = ['type', word[5:]]
+        else:
+            filter_ = ['tag', word]
+        return _apply_prefix(token[1], filter_)
 
 
 def parse_danbooru_search_text(text: str) -> list | None:
