@@ -22,6 +22,7 @@ from utils.settings_widgets import (FocusedScrollSettingsComboBox,
                                     FocusedScrollSettingsSpinBox,
                                     SettingsBigCheckBox, SettingsLineEdit,
                                     SettingsPlainTextEdit)
+from utils.taskbar_progress import TaskbarProgress
 from utils.utils import pluralize
 from utils.video import DEFAULT_MAX_VIDEO_FRAMES
 from widgets.image_list import ImageList
@@ -506,6 +507,7 @@ class AutoCaptioner(QDockWidget):
         self.image_list = image_list
         self.settings = get_settings()
         self.is_captioning = False
+        self.taskbar_progress = TaskbarProgress()
         self.captioning_thread = None
         self.processor = None
         self.model = None
@@ -544,6 +546,17 @@ class AutoCaptioner(QDockWidget):
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_area.setWidget(container)
         self.setWidget(scroll_area)
+        # The scroll area's minimum size defaults to its size hint, which is
+        # the full size of the settings form. That forces the dock to stay at
+        # that size and cuts off widgets like the progress bar when the dock
+        # is made smaller. With a zero minimum size the dock can shrink
+        # freely and the scroll area scrolls the contents instead.
+        scroll_area.setMinimumSize(0, 0)
+        # Keep the start button and the progress bar reachable at the top of
+        # the scrollable contents even when the dock is very small.
+        container.setMinimumHeight(
+            self.start_cancel_button.sizeHint().height()
+            + self.progress_bar.sizeHint().height())
 
         self.start_cancel_button.clicked.connect(
             self.start_or_cancel_captioning)
@@ -628,6 +641,7 @@ class AutoCaptioner(QDockWidget):
             self.progress_bar.setRange(0, selected_image_count)
             self.progress_bar.setValue(0)
             self.progress_bar.show()
+            self.taskbar_progress.set_progress(self, 0, selected_image_count)
         tag_separator = get_tag_separator()
         models_directory_path = self.settings.value(
             'models_directory_path',
@@ -645,10 +659,18 @@ class AutoCaptioner(QDockWidget):
             self.caption_generated)
         self.captioning_thread.progress_bar_update_requested.connect(
             self.progress_bar.setValue)
+        self.captioning_thread.progress_bar_update_requested.connect(
+            lambda value: self.taskbar_progress.set_progress(
+                self, value, self.progress_bar.maximum()))
         self.captioning_thread.finished.connect(
             lambda: self.set_is_captioning(False))
         self.captioning_thread.finished.connect(restore_stdout_and_stderr)
         self.captioning_thread.finished.connect(self.progress_bar.hide)
+        self.captioning_thread.finished.connect(
+            lambda: self.taskbar_progress.set_progress(self, 0, 0))
+        self.captioning_thread.finished.connect(
+            lambda: self.taskbar_progress.show_error(self)
+            if self.captioning_thread.is_error else None)
         self.captioning_thread.finished.connect(
             lambda: self.start_cancel_button.setEnabled(True))
         if show_alert_when_finished:
