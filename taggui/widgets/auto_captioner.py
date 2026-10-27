@@ -541,19 +541,19 @@ class AutoCaptioner(QDockWidget):
         layout.addLayout(self.caption_settings_form)
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        # `AdjustToContents` makes the scroll area request the full size of
-        # the settings form, which prevents the dock from being resized
-        # smaller and instead cuts off widgets like the progress bar.
-        # `AdjustIgnored` lets the dock shrink freely; the scroll area then
-        # scrolls the contents instead.
         scroll_area.setSizeAdjustPolicy(
-            QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
+            QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_area.setWidget(container)
         self.setWidget(scroll_area)
+        # The scroll area's minimum size defaults to its size hint, which is
+        # the full size of the settings form. That forces the dock to stay at
+        # that size and cuts off widgets like the progress bar when the dock
+        # is made smaller. With a zero minimum size the dock can shrink
+        # freely and the scroll area scrolls the contents instead.
+        scroll_area.setMinimumSize(0, 0)
         # Keep the start button and the progress bar reachable at the top of
         # the scrollable contents even when the dock is very small.
-        scroll_area.setMinimumSize(0, 0)
         container.setMinimumHeight(
             self.start_cancel_button.sizeHint().height()
             + self.progress_bar.sizeHint().height())

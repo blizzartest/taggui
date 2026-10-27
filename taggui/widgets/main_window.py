@@ -4,7 +4,7 @@ from PySide6.QtCore import (QKeyCombination, QModelIndex, QTimer, QUrl, Qt,
                             Slot)
 from PySide6.QtGui import (QAction, QCloseEvent, QDesktopServices, QIcon,
                            QKeySequence, QPixmap, QShortcut)
-from PySide6.QtWidgets import (QApplication, QFileDialog, QLabel, QMainWindow,
+from PySide6.QtWidgets import (QApplication, QFileDialog, QMainWindow,
                                QMessageBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 from transformers import AutoTokenizer
@@ -204,30 +204,7 @@ class MainWindow(QMainWindow):
         jump_to_first_untagged_image_shortcut.activated.connect(
             self.image_list.jump_to_first_untagged_image)
         self.restore()
-        # The version label is anchored to the top right corner of the
-        # window, on top of all other widgets. It ignores mouse events so
-        # that it does not block the widgets underneath it.
-        self.version_label = QLabel(f'v{VERSION}', self)
-        self.version_label.setStyleSheet(
-            'color: gray; background: transparent;')
-        self.version_label.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.version_label.raise_()
-        self.reposition_version_label()
         self.image_tags_editor.tag_input_box.setFocus()
-
-    def reposition_version_label(self):
-        """Keep the version label in the upper right corner, below the menu
-        bar."""
-        version_label_size = self.version_label.sizeHint()
-        self.version_label.setGeometry(
-            self.width() - version_label_size.width() - 6,
-            self.menuBar().height() + 4,
-            version_label_size.width(), version_label_size.height())
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.reposition_version_label()
 
     def closeEvent(self, event: QCloseEvent):
         """Save the window geometry and state before closing."""

@@ -54,6 +54,26 @@ TEXT_ROLES = (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
               QPalette.ColorRole.ButtonText, QPalette.ColorRole.Link,
               QPalette.ColorRole.PlaceholderText)
 
+# On a pure black background, widget borders would be invisible because
+# they are drawn from the (black) window color. This stylesheet draws
+# visible borders around the main framed widgets instead.
+OLED_BLACK_STYLE_SHEET = '''
+QDockWidget::title {
+    border: 1px solid #3c3c3c;
+    padding: 2px;
+}
+QLineEdit, QPlainTextEdit, QListView, QTreeView, QTableView, QComboBox,
+QSpinBox, QDoubleSpinBox {
+    border: 1px solid #3c3c3c;
+}
+QPushButton {
+    border: 1px solid #3c3c3c;
+}
+QMenu {
+    border: 1px solid #3c3c3c;
+}
+'''
+
 
 def apply_theme(app, theme: str):
     """Apply a theme to the application. The System theme keeps the style's
@@ -75,3 +95,4 @@ def apply_theme(app, theme: str):
             palette.setColor(QPalette.ColorGroup.Disabled, role,
                              disabled_text_color)
     app.setPalette(palette)
+    app.setStyleSheet(OLED_BLACK_STYLE_SHEET if theme == 'OLED Black' else '')
