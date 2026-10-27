@@ -19,5 +19,5 @@ torchvision==0.23.0+cu128
 torchaudio==2.8.0+cu128
 # FlashAttention (Florence-2, Phi-3-Vision)
 flash-attn==2.8.3; platform_system == "Linux"
-https://github.com/kingbri1/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu128torch2.8.0cxx11abiFALSE-cp312-win_amd64.whl; platform_system == "Windows" and python_version == "3.12"
-https://github.com/kingbri1/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu128torch2.8.0cxx11abiFALSE-cp311-win_amd64.whl; platform_system == "Windows" and python_version == "3.11"
+https://github.com/kingbri1/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu128torch2.8.0cxx11abiFALSE-cp312-cp312-win_amd64.whl; platform_system == "Windows" and python_version == "3.12"
+https://github.com/kingbri1/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu128torch2.8.0cxx11abiFALSE-cp311-cp311-win_amd64.whl; platform_system == "Windows" and python_version == "3.11"
