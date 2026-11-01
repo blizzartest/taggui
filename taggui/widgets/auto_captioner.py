@@ -22,6 +22,7 @@ from utils.settings_widgets import (FocusedScrollSettingsComboBox,
                                     FocusedScrollSettingsSpinBox,
                                     SettingsBigCheckBox, SettingsLineEdit,
                                     SettingsPlainTextEdit)
+from utils.taskbar_progress import TaskbarProgress
 from utils.utils import pluralize
 from utils.video import DEFAULT_MAX_VIDEO_FRAMES
 from widgets.image_list import ImageList
@@ -40,6 +41,30 @@ def set_text_edit_height(text_edit: QPlainTextEdit, line_count: int):
                  + document.documentMargin() * 2
                  + text_edit.frameWidth() * 2)
     text_edit.setFixedHeight(height)
+
+
+class CaptionerScrollContainer(QWidget):
+    """A container widget for the settings form that can never be squeezed.
+
+    A `QScrollArea` with `widgetResizable` enabled resizes its widget to the
+    viewport size, but never below the widget's minimum size hint. The
+    settings form layouts report very small minimum sizes (their labels can
+    wrap and their fields can shrink), so with the default minimum size hint
+    the form would be squeezed to the width of a narrowed dock, wrapping and
+    clipping the text. Returning the full size hint as the minimum size hint
+    keeps the container at its proper size, and the scroll area shows scroll
+    bars instead."""
+
+    def __init__(self, layout: QVBoxLayout):
+        super().__init__()
+        self.contained_layout = layout
+        self.setLayout(layout)
+
+    def sizeHint(self):
+        return self.contained_layout.totalSizeHint()
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
 
 
 class HorizontalLine(QFrame):
@@ -506,6 +531,7 @@ class AutoCaptioner(QDockWidget):
         self.image_list = image_list
         self.settings = get_settings()
         self.is_captioning = False
+        self.taskbar_progress = TaskbarProgress()
         self.captioning_thread = None
         self.processor = None
         self.model = None
@@ -530,20 +556,32 @@ class AutoCaptioner(QDockWidget):
         set_text_edit_height(self.console_text_edit, 4)
         self.console_text_edit.setReadOnly(True)
         self.console_text_edit.hide()
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.addWidget(self.start_cancel_button)
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.console_text_edit)
+        # The button, the progress bar, and the console stay outside the
+        # scroll area so that they are always visible and laid out at the
+        # width of the dock; only the settings form below scrolls. This also
+        # means the progress bar can never be cut off by a small dock.
+        dock_container = QWidget()
+        dock_layout = QVBoxLayout(dock_container)
+        dock_layout.setContentsMargins(0, 0, 0, 0)
+        dock_layout.addWidget(self.start_cancel_button)
+        dock_layout.addWidget(self.progress_bar)
+        dock_layout.addWidget(self.console_text_edit)
         self.caption_settings_form = CaptionSettingsForm()
-        layout.addLayout(self.caption_settings_form)
+        settings_container = CaptionerScrollContainer(self.caption_settings_form)
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setSizeAdjustPolicy(
-            QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_area.setWidget(container)
-        self.setWidget(scroll_area)
+        scroll_area.setWidget(settings_container)
+        dock_layout.addWidget(scroll_area)
+        self.setWidget(dock_container)
+        scroll_area.setMinimumHeight(0)
+        # The scroll area's minimum height defaults to its size hint, which
+        # is the full height of the settings form. That forces the dock to
+        # stay at that height. With a zero minimum height the dock can
+        # shrink vertically and the scroll area scrolls the settings form
+        # instead. The container's `minimumSizeHint()` (see the class) keeps
+        # the form itself at full size, so a narrowed dock gets scroll bars
+        # rather than squeezed text.
 
         self.start_cancel_button.clicked.connect(
             self.start_or_cancel_captioning)
@@ -552,6 +590,13 @@ class AutoCaptioner(QDockWidget):
     def start_or_cancel_captioning(self):
         if self.is_captioning:
             # Cancel captioning.
+            if self.captioning_thread is None:
+                # Captioning never started (e.g. an error occurred during
+                # setup); just reset the state instead of wedging the
+                # button.
+                self.set_is_captioning(False)
+                self.start_cancel_button.setEnabled(True)
+                return
             self.captioning_thread.is_canceled = True
             self.start_cancel_button.setEnabled(False)
             self.start_cancel_button.setText('Canceling Auto-Captioning...')
@@ -628,6 +673,7 @@ class AutoCaptioner(QDockWidget):
             self.progress_bar.setRange(0, selected_image_count)
             self.progress_bar.setValue(0)
             self.progress_bar.show()
+            self.taskbar_progress.set_progress(self, 0, selected_image_count)
         tag_separator = get_tag_separator()
         models_directory_path = self.settings.value(
             'models_directory_path',
@@ -645,10 +691,18 @@ class AutoCaptioner(QDockWidget):
             self.caption_generated)
         self.captioning_thread.progress_bar_update_requested.connect(
             self.progress_bar.setValue)
+        self.captioning_thread.progress_bar_update_requested.connect(
+            lambda value: self.taskbar_progress.set_progress(
+                self, value, self.progress_bar.maximum()))
         self.captioning_thread.finished.connect(
             lambda: self.set_is_captioning(False))
         self.captioning_thread.finished.connect(restore_stdout_and_stderr)
         self.captioning_thread.finished.connect(self.progress_bar.hide)
+        self.captioning_thread.finished.connect(
+            lambda: self.taskbar_progress.set_progress(self, 0, 0))
+        self.captioning_thread.finished.connect(
+            lambda: self.taskbar_progress.show_error(self)
+            if self.captioning_thread.is_error else None)
         self.captioning_thread.finished.connect(
             lambda: self.start_cancel_button.setEnabled(True))
         if show_alert_when_finished:

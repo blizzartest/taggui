@@ -18,7 +18,8 @@ DEFAULT_SETTINGS = {
     'load_mode': 'full',
     'image_list_sort_mode': 'Name',
     'image_list_reverse_sort': False,
-    'video_autoplay': False
+    'video_autoplay': False,
+    'theme': 'System'
 }
 
 

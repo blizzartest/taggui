@@ -12,6 +12,7 @@ from transformers import AutoTokenizer
 from dialogs.batch_reorder_tags_dialog import BatchReorderTagsDialog
 from dialogs.export_metadata_dialog import ExportMetadataDialog
 from dialogs.find_and_replace_dialog import FindAndReplaceDialog
+from dialogs.find_duplicate_images_dialog import FindDuplicateImagesDialog
 from dialogs.settings_dialog import SettingsDialog
 from models.image_list_model import ImageListModel
 from models.image_tag_list_model import ImageTagListModel
@@ -23,7 +24,9 @@ from utils.image import Image
 from utils.key_press_forwarder import KeyPressForwarder
 from utils.settings import DEFAULT_SETTINGS, get_settings, get_tag_separator
 from utils.shortcut_remover import ShortcutRemover
+from utils.theme import THEMES, apply_theme
 from utils.utils import get_resource_path, pluralize
+from utils.version import VERSION
 from widgets.all_tags_editor import AllTagsEditor
 from widgets.auto_captioner import AutoCaptioner
 from widgets.image_list import ImageList
@@ -70,8 +73,8 @@ class MainWindow(QMainWindow):
         self.image_tag_list_model = ImageTagListModel()
 
         self.setWindowIcon(QIcon(QPixmap(get_resource_path(ICON_PATH))))
-        # Not setting this results in some ugly colors.
-        self.setPalette(self.app.style().standardPalette())
+        # The application palette (which may be themed) is set in
+        # `run_gui()`; a window-specific palette would override it.
         # The font size must be set before creating the widgets to ensure that
         # everything has the correct font size.
         self.set_font_size()
@@ -347,6 +350,40 @@ class MainWindow(QMainWindow):
             delete_txt_files=clicked_button is delete_button)
 
     @Slot()
+    def show_find_duplicate_images_dialog(self):
+        """Find images/videos with identical tags and optionally delete all
+        but the highest-resolution copy of each duplicate group."""
+        if not self.directory_path:
+            message_box = QMessageBox()
+            message_box.setWindowTitle('Find Duplicate Images')
+            message_box.setIcon(QMessageBox.Icon.Information)
+            message_box.setText('Please load a directory first.')
+            message_box.exec()
+            return
+        find_duplicate_images_dialog = FindDuplicateImagesDialog(
+            parent=self, image_list_model=self.image_list_model,
+            directory_path=self.directory_path)
+        find_duplicate_images_dialog.exec()
+        if find_duplicate_images_dialog.deleted_image_paths:
+            self.handle_images_deleted(
+                find_duplicate_images_dialog.deleted_image_paths)
+
+    def set_theme(self, theme_name: str):
+        """Apply the selected theme and remember it in the settings."""
+        self.settings.setValue('theme', theme_name)
+        apply_theme(self.app, theme_name)
+        for theme_action in self.theme_actions:
+            theme_action.setChecked(theme_action.text() == theme_name)
+
+    @Slot()
+    def show_about_message_box(self):
+        message_box = QMessageBox(parent=self)
+        message_box.setWindowTitle('About TagGUI')
+        message_box.setIcon(QMessageBox.Icon.Information)
+        message_box.setText(f'TagGUI v{VERSION}')
+        message_box.exec()
+
+    @Slot()
     def remove_duplicate_tags(self):
         removed_tag_count = self.image_list_model.remove_duplicate_tags()
         message_box = QMessageBox()
@@ -427,6 +464,12 @@ class MainWindow(QMainWindow):
         remove_duplicate_tags_action.triggered.connect(
             self.remove_duplicate_tags)
         edit_menu.addAction(remove_duplicate_tags_action)
+        find_duplicate_images_action = QAction('Find Duplicate Images...',
+                                              parent=self)
+        find_duplicate_images_action.setShortcut(QKeySequence('Ctrl+Shift+D'))
+        find_duplicate_images_action.triggered.connect(
+            self.show_find_duplicate_images_dialog)
+        edit_menu.addAction(find_duplicate_images_action)
         remove_empty_tags_action = QAction('Remove Empty Tags', parent=self)
         remove_empty_tags_action.setShortcut(QKeySequence('Ctrl+E'))
         remove_empty_tags_action.triggered.connect(
@@ -463,8 +506,26 @@ class MainWindow(QMainWindow):
         load_mode_menu = view_menu.addMenu('Load Mode')
         load_mode_menu.addAction(self.load_mode_full_action)
         load_mode_menu.addAction(self.load_mode_tags_only_action)
-        
+
+        theme_menu = view_menu.addMenu('Theme')
+        self.theme_actions = []
+        theme = self.settings.value(
+            'theme', defaultValue=DEFAULT_SETTINGS['theme'], type=str)
+        for theme_name in THEMES:
+            theme_action = QAction(theme_name, parent=self)
+            theme_action.setCheckable(True)
+            theme_action.setChecked(theme_name == theme)
+            theme_action.triggered.connect(
+                lambda _, theme_name=theme_name:
+                    self.set_theme(theme_name))
+            self.theme_actions.append(theme_action)
+            theme_menu.addAction(theme_action)
+
         help_menu = menu_bar.addMenu('Help')
+        about_action = QAction(f'About TagGUI v{VERSION}...', parent=self)
+        about_action.triggered.connect(self.show_about_message_box)
+        help_menu.addAction(about_action)
+        help_menu.addSeparator()
         open_github_repository_action = QAction('GitHub', parent=self)
         open_github_repository_action.triggered.connect(
             lambda: QDesktopServices.openUrl(QUrl(GITHUB_REPOSITORY_URL)))
