@@ -72,6 +72,9 @@ if sys.platform == 'win32':
 class TaskbarProgress:
     """Shows and updates a progress indicator on the Windows taskbar icon.
 
+    Any widget (e.g. a dock widget) can be passed; the top-level window is
+    resolved from it, because only top-level windows have a taskbar button.
+
     All failures (including on non-Windows platforms) degrade to a no-op so
     that captioning is never blocked by the taskbar integration.
     """
@@ -126,14 +129,26 @@ class TaskbarProgress:
             self.taskbar_list = None
             self.methods = None
 
-    def set_progress(self, window, value: int, maximum: int):
-        """Show the progress on the taskbar icon of the window. If `maximum`
-        is not positive, the progress indicator is hidden."""
+    @staticmethod
+    def _get_hwnd(widget) -> int:
+        """Return the native window handle of the top-level window that
+        contains the widget. Calling `winId()` forces the creation of the
+        native window if it does not exist yet."""
+        if widget is None:
+            return 0
+        top_level_widget = widget.window()
+        if top_level_widget is None:
+            return 0
+        return int(top_level_widget.winId())
+
+    def set_progress(self, widget, value: int, maximum: int):
+        """Show the progress on the taskbar icon of the top-level window of
+        the widget. If `maximum` is not positive, the progress indicator is
+        hidden."""
         if self.methods is None:
             return
         try:
-            window_id = (int(window.windowHandle().winId())
-                         if window is not None else 0)
+            window_id = self._get_hwnd(widget)
             if not window_id:
                 return
             if maximum <= 0:
@@ -145,13 +160,12 @@ class TaskbarProgress:
         except Exception:
             pass
 
-    def show_error(self, window):
+    def show_error(self, widget):
         """Turn the taskbar progress indicator red to indicate an error."""
         if self.methods is None:
             return
         try:
-            window_id = (int(window.windowHandle().winId())
-                         if window is not None else 0)
+            window_id = self._get_hwnd(widget)
             if not window_id:
                 return
             self.methods.set_progress_state(
