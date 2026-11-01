@@ -43,6 +43,23 @@ def set_text_edit_height(text_edit: QPlainTextEdit, line_count: int):
     text_edit.setFixedHeight(height)
 
 
+class CaptionerScrollContainer(QWidget):
+    """A container widget for the Auto-Captioner scroll area that can never
+    be squeezed.
+
+    A `QScrollArea` with `widgetResizable` enabled resizes its widget to the
+    viewport size, but never below the widget's minimum size hint. The
+    settings form layouts report very small minimum sizes (their labels can
+    wrap and their fields can shrink), so with the default minimum size hint
+    the whole form would be squeezed to the width of a narrowed dock,
+    wrapping and clipping the text. Returning the full size hint as the
+    minimum size hint keeps the container at its proper size, and the scroll
+    area shows scroll bars instead."""
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+
 class HorizontalLine(QFrame):
     def __init__(self):
         super().__init__()
@@ -532,7 +549,7 @@ class AutoCaptioner(QDockWidget):
         set_text_edit_height(self.console_text_edit, 4)
         self.console_text_edit.setReadOnly(True)
         self.console_text_edit.hide()
-        container = QWidget()
+        container = CaptionerScrollContainer()
         layout = QVBoxLayout(container)
         layout.addWidget(self.start_cancel_button)
         layout.addWidget(self.progress_bar)
@@ -551,21 +568,10 @@ class AutoCaptioner(QDockWidget):
         # stay at that height and cuts off widgets like the progress bar
         # when the dock is made smaller. With a zero minimum height the
         # dock can shrink vertically and the scroll area scrolls the
-        # contents instead.
+        # contents instead. The container's `minimumSizeHint()` (see the
+        # class) keeps the contents themselves at full size, so a narrowed
+        # dock gets scroll bars rather than squeezed text.
         scroll_area.setMinimumHeight(0)
-        # Keep the start button and the progress bar reachable at the top of
-        # the scrollable contents even when the dock is very small.
-        container.setMinimumHeight(
-            self.start_cancel_button.sizeHint().height()
-            + self.progress_bar.sizeHint().height())
-        # Prevent the settings form from ever being squeezed narrower than
-        # its size hint. Without this, making the dock narrower than the
-        # form causes the scroll area (with `widgetResizable` enabled) to
-        # resize the container to the narrow viewport, wrapping and
-        # clipping the text. With the minimum width set, a horizontal
-        # scroll bar appears instead and the form always lays out at full
-        # width.
-        container.setMinimumWidth(container.sizeHint().width())
 
         self.start_cancel_button.clicked.connect(
             self.start_or_cancel_captioning)
