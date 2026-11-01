@@ -44,17 +44,24 @@ def set_text_edit_height(text_edit: QPlainTextEdit, line_count: int):
 
 
 class CaptionerScrollContainer(QWidget):
-    """A container widget for the Auto-Captioner scroll area that can never
-    be squeezed.
+    """A container widget for the settings form that can never be squeezed.
 
     A `QScrollArea` with `widgetResizable` enabled resizes its widget to the
     viewport size, but never below the widget's minimum size hint. The
     settings form layouts report very small minimum sizes (their labels can
     wrap and their fields can shrink), so with the default minimum size hint
-    the whole form would be squeezed to the width of a narrowed dock,
-    wrapping and clipping the text. Returning the full size hint as the
-    minimum size hint keeps the container at its proper size, and the scroll
-    area shows scroll bars instead."""
+    the form would be squeezed to the width of a narrowed dock, wrapping and
+    clipping the text. Returning the full size hint as the minimum size hint
+    keeps the container at its proper size, and the scroll area shows scroll
+    bars instead."""
+
+    def __init__(self, layout: QVBoxLayout):
+        super().__init__()
+        self.contained_layout = layout
+        self.setLayout(layout)
+
+    def sizeHint(self):
+        return self.contained_layout.totalSizeHint()
 
     def minimumSizeHint(self):
         return self.sizeHint()
@@ -549,29 +556,32 @@ class AutoCaptioner(QDockWidget):
         set_text_edit_height(self.console_text_edit, 4)
         self.console_text_edit.setReadOnly(True)
         self.console_text_edit.hide()
-        container = CaptionerScrollContainer()
-        layout = QVBoxLayout(container)
-        layout.addWidget(self.start_cancel_button)
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.console_text_edit)
+        # The button, the progress bar, and the console stay outside the
+        # scroll area so that they are always visible and laid out at the
+        # width of the dock; only the settings form below scrolls. This also
+        # means the progress bar can never be cut off by a small dock.
+        dock_container = QWidget()
+        dock_layout = QVBoxLayout(dock_container)
+        dock_layout.setContentsMargins(0, 0, 0, 0)
+        dock_layout.addWidget(self.start_cancel_button)
+        dock_layout.addWidget(self.progress_bar)
+        dock_layout.addWidget(self.console_text_edit)
         self.caption_settings_form = CaptionSettingsForm()
-        layout.addLayout(self.caption_settings_form)
+        settings_container = CaptionerScrollContainer(self.caption_settings_form)
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setSizeAdjustPolicy(
-            QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_area.setWidget(container)
-        self.setWidget(scroll_area)
+        scroll_area.setWidget(settings_container)
+        dock_layout.addWidget(scroll_area)
+        self.setWidget(dock_container)
+        scroll_area.setMinimumHeight(0)
         # The scroll area's minimum height defaults to its size hint, which
         # is the full height of the settings form. That forces the dock to
-        # stay at that height and cuts off widgets like the progress bar
-        # when the dock is made smaller. With a zero minimum height the
-        # dock can shrink vertically and the scroll area scrolls the
-        # contents instead. The container's `minimumSizeHint()` (see the
-        # class) keeps the contents themselves at full size, so a narrowed
-        # dock gets scroll bars rather than squeezed text.
-        scroll_area.setMinimumHeight(0)
+        # stay at that height. With a zero minimum height the dock can
+        # shrink vertically and the scroll area scrolls the settings form
+        # instead. The container's `minimumSizeHint()` (see the class) keeps
+        # the form itself at full size, so a narrowed dock gets scroll bars
+        # rather than squeezed text.
 
         self.start_cancel_button.clicked.connect(
             self.start_or_cancel_captioning)
