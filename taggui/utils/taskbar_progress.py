@@ -2,8 +2,8 @@
 
 Uses the native ITaskbarList3 COM interface so that captioning progress is
 shown on the taskbar icon, like browsers do when downloading things. On
-non-Windows platforms every method is a no-op. On Windows, if the COM
-interface cannot be used, the class degrades to a no-op instead of raising.
+non-Windows platforms, or if the COM interface cannot be used, every method
+is a no-op instead of raising.
 """
 import sys
 
@@ -21,7 +21,12 @@ if sys.platform == 'win32':
 
     def _guid_from_string(guid_string: str) -> '_GUID':
         guid = _GUID()
-        ctypes.oledll.ole32.CLSIDFromString(guid_string, byref(guid))
+        # `CLSIDFromString` requires a UTF-16 string; passing a `str` with
+        # `ctypes` does that automatically for wide-character APIs.
+        result = ctypes.oledll.ole32.CLSIDFromString(guid_string,
+                                                     byref(guid))
+        if result != 0:
+            raise OSError(f'CLSIDFromString failed: {result:#x}')
         return guid
 
     _CLSID_TASKBAR_LIST = '{56FDF344-FD6D-11d0-958A-006097C9A090}'
@@ -30,10 +35,11 @@ if sys.platform == 'win32':
     _TBP_NOPROGRESS = 0x0
     _TBP_ERROR = 0x4
 
-    # COM method signatures take the object pointer (`this`) as the first
-    # argument, followed by the parameters declared in the IDL.
     _HRESULT = ctypes.HRESULT
 
+    # COM method signatures take the object pointer (`this`) as the first
+    # argument, followed by the parameters declared in the IDL. All methods
+    # return an HRESULT that must be checked manually.
     class _TaskbarList3Methods(Structure):
         _fields_ = [
             ('query_interface',
@@ -57,12 +63,21 @@ if sys.platform == 'win32':
             ('unregister_tab', WINFUNCTYPE(_HRESULT, c_void_p, HWND))
         ]
 
+    def _check_hresult(hresult, operation: str) -> None:
+        """Raise an OSError if the COM call returned a failure HRESULT."""
+        if hresult is not None and hresult != 0:
+            raise OSError(f'{operation} failed: {hresult & 0xffffffff:#x}')
+
 
 class TaskbarProgress:
-    """Shows and updates a progress indicator on the Windows taskbar icon."""
+    """Shows and updates a progress indicator on the Windows taskbar icon.
+
+    All failures (including on non-Windows platforms) degrade to a no-op so
+    that captioning is never blocked by the taskbar integration.
+    """
 
     def __init__(self):
-        self.taskbar_list = c_void_p()
+        self.taskbar_list = None
         self.methods = None
         if sys.platform != 'win32':
             return
@@ -84,9 +99,14 @@ class TaskbarProgress:
                 unknown_methods = _TaskbarList3Methods.from_address(
                     ctypes.cast(unknown_pointer,
                                 POINTER(c_void_p)).contents.value)
-                unknown_methods.query_interface(
-                    unknown_pointer, byref(_guid_from_string(
-                        _IID_ITASKBAR_LIST3)), byref(taskbar_list_pointer))
+                _check_hresult(
+                    unknown_methods.query_interface(
+                        unknown_pointer, byref(_guid_from_string(
+                            _IID_ITASKBAR_LIST3)),
+                        byref(taskbar_list_pointer)),
+                    'QueryInterface')
+                if not taskbar_list_pointer:
+                    raise OSError('ITaskbarList3 was not returned.')
             finally:
                 _TaskbarList3Methods.from_address(
                     ctypes.cast(unknown_pointer,
@@ -95,10 +115,15 @@ class TaskbarProgress:
             self.methods = _TaskbarList3Methods.from_address(
                 ctypes.cast(taskbar_list_pointer,
                             POINTER(c_void_p)).contents.value)
-            self.methods.hr_init(taskbar_list_pointer)
+            _check_hresult(self.methods.hr_init(taskbar_list_pointer),
+                           'HrInit')
             self.taskbar_list = taskbar_list_pointer
         except OSError:
-            self.taskbar_list = c_void_p()
+            self.taskbar_list = None
+            self.methods = None
+        except Exception:
+            # Never let taskbar problems break captioning.
+            self.taskbar_list = None
             self.methods = None
 
     def set_progress(self, window, value: int, maximum: int):
@@ -106,27 +131,30 @@ class TaskbarProgress:
         is not positive, the progress indicator is hidden."""
         if self.methods is None:
             return
-        window_id = int(window.windowHandle().winId()) if window else 0
-        if not window_id:
-            return
         try:
+            window_id = (int(window.windowHandle().winId())
+                         if window is not None else 0)
+            if not window_id:
+                return
             if maximum <= 0:
                 self.methods.set_progress_state(
                     self.taskbar_list, window_id, _TBP_NOPROGRESS)
             else:
                 self.methods.set_progress_value(
                     self.taskbar_list, window_id, max(0, value), maximum)
-        except OSError:
+        except Exception:
             pass
 
     def show_error(self, window):
+        """Turn the taskbar progress indicator red to indicate an error."""
         if self.methods is None:
             return
-        window_id = int(window.windowHandle().winId()) if window else 0
-        if not window_id:
-            return
         try:
+            window_id = (int(window.windowHandle().winId())
+                         if window is not None else 0)
+            if not window_id:
+                return
             self.methods.set_progress_state(
                 self.taskbar_list, window_id, _TBP_ERROR)
-        except OSError:
+        except Exception:
             pass

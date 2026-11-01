@@ -590,6 +590,13 @@ class AutoCaptioner(QDockWidget):
     def start_or_cancel_captioning(self):
         if self.is_captioning:
             # Cancel captioning.
+            if self.captioning_thread is None:
+                # Captioning never started (e.g. an error occurred during
+                # setup); just reset the state instead of wedging the
+                # button.
+                self.set_is_captioning(False)
+                self.start_cancel_button.setEnabled(True)
+                return
             self.captioning_thread.is_canceled = True
             self.start_cancel_button.setEnabled(False)
             self.start_cancel_button.setText('Canceling Auto-Captioning...')
