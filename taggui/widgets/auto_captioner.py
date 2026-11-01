@@ -546,19 +546,26 @@ class AutoCaptioner(QDockWidget):
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_area.setWidget(container)
         self.setWidget(scroll_area)
-        # The scroll area's minimum size defaults to its size hint, which is
-        # the full size of the settings form. That forces the dock to stay at
-        # that size and cuts off widgets like the progress bar when the dock
-        # is made smaller. With a zero minimum height the dock can shrink
-        # vertically and the scroll area scrolls the contents instead. The
-        # minimum width is kept so that the dock cannot be narrowed below
-        # the width of the settings form, which would squeeze the text.
+        # The scroll area's minimum height defaults to its size hint, which
+        # is the full height of the settings form. That forces the dock to
+        # stay at that height and cuts off widgets like the progress bar
+        # when the dock is made smaller. With a zero minimum height the
+        # dock can shrink vertically and the scroll area scrolls the
+        # contents instead.
         scroll_area.setMinimumHeight(0)
         # Keep the start button and the progress bar reachable at the top of
         # the scrollable contents even when the dock is very small.
         container.setMinimumHeight(
             self.start_cancel_button.sizeHint().height()
             + self.progress_bar.sizeHint().height())
+        # Prevent the settings form from ever being squeezed narrower than
+        # its size hint. Without this, making the dock narrower than the
+        # form causes the scroll area (with `widgetResizable` enabled) to
+        # resize the container to the narrow viewport, wrapping and
+        # clipping the text. With the minimum width set, a horizontal
+        # scroll bar appears instead and the form always lays out at full
+        # width.
+        container.setMinimumWidth(container.sizeHint().width())
 
         self.start_cancel_button.clicked.connect(
             self.start_or_cancel_captioning)
