@@ -549,9 +549,11 @@ class AutoCaptioner(QDockWidget):
         # The scroll area's minimum size defaults to its size hint, which is
         # the full size of the settings form. That forces the dock to stay at
         # that size and cuts off widgets like the progress bar when the dock
-        # is made smaller. With a zero minimum size the dock can shrink
-        # freely and the scroll area scrolls the contents instead.
-        scroll_area.setMinimumSize(0, 0)
+        # is made smaller. With a zero minimum height the dock can shrink
+        # vertically and the scroll area scrolls the contents instead. The
+        # minimum width is kept so that the dock cannot be narrowed below
+        # the width of the settings form, which would squeeze the text.
+        scroll_area.setMinimumHeight(0)
         # Keep the start button and the progress bar reachable at the top of
         # the scrollable contents even when the dock is very small.
         container.setMinimumHeight(
