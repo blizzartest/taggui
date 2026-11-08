@@ -184,12 +184,19 @@ class CaptionSettingsForm(QVBoxLayout):
             'Number of images run through the tagger per inference. Higher '
             'values better utilize the GPU at the cost of more VRAM. Set to 1 '
             'to caption images one at a time.')
+        self.pixai_use_bfloat16_check_box = SettingsBigCheckBox(
+            key='pixai_tagger_use_bfloat16', default=False)
+        self.pixai_use_bfloat16_check_box.setToolTip(
+            'Run the tagger in bfloat16 instead of float16. This is faster '
+            'on newer GPUs but can slightly change the generated tags.')
         pixai_tagger_settings_form.addRow(
             'Show probabilities', self.pixai_show_probabilities_check_box)
         pixai_tagger_settings_form.addRow('Maximum tags',
                                           self.pixai_max_tags_spin_box)
         pixai_tagger_settings_form.addRow('Batch size',
                                          self.pixai_batch_size_spin_box)
+        pixai_tagger_settings_form.addRow('Use bfloat16',
+                                         self.pixai_use_bfloat16_check_box)
         self.pixai_category_include_check_boxes = {}
         self.pixai_min_probability_spin_boxes = {}
         # A minimum probability of 0 means the model's recommended
@@ -496,6 +503,8 @@ class CaptionSettingsForm(QVBoxLayout):
                     self.pixai_show_probabilities_check_box.isChecked(),
                 'max_tags': self.pixai_max_tags_spin_box.value(),
                 'batch_size': self.pixai_batch_size_spin_box.value(),
+                'use_bfloat16':
+                    self.pixai_use_bfloat16_check_box.isChecked(),
                 'tags_to_exclude':
                     self.pixai_tags_to_exclude_text_edit.toPlainText(),
                 'multiframe_enabled':
