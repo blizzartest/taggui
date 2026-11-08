@@ -74,7 +74,9 @@ class PixaiTaggerModel:
             frame_slice = frame_slice.to(model_dtype)
             with torch.inference_mode():
                 probabilities = self.model(frame_slice).sigmoid()
-            batch_parts.append(probabilities.cpu().numpy())
+            # Convert to float32 before the NumPy conversion because NumPy
+            # does not support bfloat16.
+            batch_parts.append(probabilities.float().cpu().numpy())
         return np.concatenate(batch_parts, axis=0)
 
     def aggregate_probabilities(
