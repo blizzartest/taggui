@@ -24,9 +24,12 @@ from utils.settings import get_tag_separator
 # or waiting to be consumed, and the size of the queue connecting the
 # prefetch workers to the inference thread.
 CPU_COUNT = os.cpu_count() or 1
-PREFETCH_WORKER_COUNT = min(4, CPU_COUNT)
-PREFETCH_QUEUE_SIZE = max(2, PREFETCH_WORKER_COUNT)
-MAX_IN_FLIGHT_PREFETCHES = (PREFETCH_WORKER_COUNT
+# Image decoding releases the GIL, so decode throughput scales with the
+# number of workers. Keep the queue and in-flight limits large enough that
+# the workers can stay busy while a batch runs on the GPU.
+PREFETCH_WORKER_COUNT = min(8, CPU_COUNT)
+PREFETCH_QUEUE_SIZE = max(4, PREFETCH_WORKER_COUNT)
+MAX_IN_FLIGHT_PREFETCHES = (2 * PREFETCH_WORKER_COUNT
                             + PREFETCH_QUEUE_SIZE)
 
 
