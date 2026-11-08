@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import os
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 import threading
 from time import perf_counter
 import traceback
@@ -270,7 +270,7 @@ class CaptioningThread(QThread):
             try:
                 queue.put(entry, timeout=0.1)
                 return True
-            except Empty:
+            except Full:
                 if self.is_canceled or self.is_prefetch_aborted:
                     return False
 
