@@ -3,6 +3,8 @@ from datetime import datetime
 import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image as PilImage
+from PIL.ImageOps import exif_transpose
 from transformers import AutoModel
 from transformers.utils.import_utils import is_torch_bf16_gpu_available
 
@@ -11,7 +13,7 @@ from auto_captioning.auto_captioning_model import AutoCaptioningModel
 from auto_captioning.models.wd_tagger import (KAOMOJIS,
                                               get_tags_to_exclude)
 from utils.enums import FrameAggregation
-from utils.video import DEFAULT_MAX_VIDEO_FRAMES
+from utils.video import DEFAULT_MAX_VIDEO_FRAMES, is_video_path
 
 
 def format_tag(tag: str) -> str:
@@ -181,10 +183,37 @@ class PixaiTagger(AutoCaptioningModel):
                     f'start time: {captioning_start_datetime_string})')
         return f'Generating tags... (device: {device_description})'
 
+    def load_image_reduced(self, image: 'captioning_thread.Image'
+                           ) -> np.ndarray:
+        """Decode a still image for tagging.
+
+        JPEG images are decoded at a reduced scale (using the JPEG
+        decoder's built-in scaling), which is much faster than decoding the
+        full image and gives the tagger all the resolution it needs.
+        Images without transparency stay RGB so half as much data needs to
+        be copied and preprocessed."""
+        if is_video_path(image.path):
+            # Videos cannot be opened by Pillow; take a single frame instead.
+            return np.array(self.load_image(image))
+        input_size = self.model.model.config.img_size
+        pil_image = PilImage.open(image.path)
+        # Ask the JPEG decoder for at least the model input size; it decodes
+        # at 1/2, 1/4, or 1/8 scale. Other formats are unaffected.
+        pil_image.draft('RGB', (input_size, input_size))
+        # Rotate the image according to the orientation tag.
+        pil_image = exif_transpose(pil_image)
+        if ('A' in pil_image.getbands()
+                or (pil_image.mode == 'P'
+                    and 'transparency' in pil_image.info)):
+            pil_image = pil_image.convert('RGBA')
+        else:
+            pil_image = pil_image.convert('RGB')
+        return np.array(pil_image)
+
     def get_model_inputs(self, image_prompt: str,
                          image: 'captioning_thread.Image') -> np.ndarray:
-        """Decode the image (or frames) and return the raw RGBA pixel
-        arrays. Preprocessing runs on the GPU afterwards."""
+        """Decode the image (or frames) and return the raw pixel arrays.
+        Preprocessing runs on the GPU afterwards."""
         if self.multiframe_enabled:
             frames = self.load_frames(
                 image, self.multiframe_frame_count,
@@ -195,8 +224,7 @@ class PixaiTagger(AutoCaptioningModel):
                 if len(frames) > 1:
                     return np.stack([np.array(frame) for frame in frames])
                 return np.array(frames[0])
-        pil_image = self.load_image(image)
-        return np.array(pil_image)
+        return self.load_image_reduced(image)
 
     def preprocess_frames(self, frame_arrays: np.ndarray) -> torch.Tensor:
         """Preprocess raw RGBA frames on the model device: composite
@@ -211,10 +239,11 @@ class PixaiTagger(AutoCaptioningModel):
             frame = torch.from_numpy(frame_array).to(self.device)
             frame = frame.permute(2, 0, 1).float().div(255)
             rgb = frame[:3]
-            alpha = frame[3]
-            # Composite the image over a white background in case it has
-            # transparent areas.
-            rgb = rgb * alpha + (1 - alpha)
+            if frame.shape[0] == 4:
+                # Composite the image over a white background in case it has
+                # transparent areas.
+                alpha = frame[3]
+                rgb = rgb * alpha + (1 - alpha)
             height, width = rgb.shape[-2:]
             scale = input_size / max(height, width)
             new_height = round(height * scale)
