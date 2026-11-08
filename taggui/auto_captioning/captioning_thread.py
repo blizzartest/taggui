@@ -378,3 +378,8 @@ class CaptioningThread(QThread):
 
     def write(self, text: str):
         self.text_outputted.emit(text)
+
+    def flush(self):
+        # The thread is used as a replacement for `sys.stdout` and
+        # `sys.stderr`, which requires a `flush` method.
+        pass
