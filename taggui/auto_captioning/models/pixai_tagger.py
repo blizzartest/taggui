@@ -90,11 +90,25 @@ class PixaiTaggerModel:
     def get_probabilities(self, image_array: np.ndarray) -> np.ndarray:
         """Run inference on a single preprocessed frame and return the raw
         sigmoid probabilities for all tags."""
-        pixel_values = torch.from_numpy(image_array).unsqueeze(0).to(
-            self.device, dtype=next(self.model.parameters()).dtype)
-        with torch.inference_mode():
-            probabilities = self.model(pixel_values).sigmoid()[0]
-        return probabilities.cpu().numpy()
+        return self.get_probabilities_batch(image_array[np.newaxis])[0]
+
+    def get_probabilities_batch(self, image_arrays: np.ndarray) -> np.ndarray:
+        """Run inference on a batch of preprocessed frames and return the
+        raw sigmoid probabilities for all tags.
+
+        `image_arrays` has shape (B, C, H, W); the return value has shape
+        (B, tag count). The batch is split into slices to bound GPU memory
+        use."""
+        batch_parts = []
+        max_frames_per_pass = 64
+        for start in range(0, image_arrays.shape[0], max_frames_per_pass):
+            frame_slice = image_arrays[start:start + max_frames_per_pass]
+            pixel_values = torch.from_numpy(frame_slice).to(
+                self.device, dtype=next(self.model.parameters()).dtype)
+            with torch.inference_mode():
+                probabilities = self.model(pixel_values).sigmoid()
+            batch_parts.append(probabilities.cpu().numpy())
+        return np.concatenate(batch_parts, axis=0)
 
     def aggregate_probabilities(
             self, all_probabilities: list[np.ndarray],
@@ -167,6 +181,10 @@ class PixaiTagger(AutoCaptioningModel):
         self.multiframe_aggregation = FrameAggregation(
             self.pixai_tagger_settings.get(
                 'multiframe_aggregation', FrameAggregation.MEAN.value))
+        self.batch_size = self.pixai_tagger_settings.get('batch_size', 1)
+        # Image loading and preprocessing only uses the CPU and does not
+        # touch the model, so it can run in prefetch worker threads.
+        self.supports_prefetch = True
 
     def get_error_message(self) -> str | None:
         return None
@@ -235,6 +253,18 @@ class PixaiTagger(AutoCaptioningModel):
         pil_image = self.load_image(image)
         return self.preprocess_frame(pil_image)
 
+    def format_caption(self, tags: tuple, probabilities: tuple
+                        ) -> tuple[str, str]:
+        caption = self.thread.tag_separator.join(tags)
+        if self.show_probabilities:
+            console_output_caption = self.thread.tag_separator.join(
+                f'{tag} ({probability:.2f})'
+                for tag, probability in zip(tags, probabilities)
+            )
+        else:
+            console_output_caption = caption
+        return caption, console_output_caption
+
     def generate_caption(self, model_inputs: np.ndarray,
                          image_prompt: str) -> tuple[str, str]:
         if model_inputs.ndim == 4:
@@ -254,12 +284,37 @@ class PixaiTagger(AutoCaptioningModel):
         else:
             tags, probabilities = self.model.generate_tags(
                 model_inputs, self.pixai_tagger_settings)
-        caption = self.thread.tag_separator.join(tags)
-        if self.show_probabilities:
-            console_output_caption = self.thread.tag_separator.join(
-                f'{tag} ({probability:.2f})'
-                for tag, probability in zip(tags, probabilities)
-            )
-        else:
-            console_output_caption = caption
-        return caption, console_output_caption
+        return self.format_caption(tags, probabilities)
+
+    def generate_captions_batch(
+            self, model_inputs_list: list[np.ndarray]
+            ) -> list[tuple[str, str]]:
+        """Run inference on a batch of images in a single forward pass per
+        frame slice. Multi-frame inputs (animated images and videos) are
+        flattened into the same batch and aggregated per image afterwards.
+        """
+        frame_counts = []
+        frame_arrays = []
+        for model_inputs in model_inputs_list:
+            if model_inputs.ndim == 4:
+                frame_array = model_inputs
+            else:
+                frame_array = model_inputs[np.newaxis]
+            frame_arrays.append(frame_array)
+            frame_counts.append(frame_array.shape[0])
+        all_frames = np.concatenate(frame_arrays, axis=0)
+        all_probabilities = self.model.get_probabilities_batch(all_frames)
+        captions = []
+        start = 0
+        for frame_count in frame_counts:
+            frame_probabilities = all_probabilities[start:start + frame_count]
+            start += frame_count
+            if frame_count > 1:
+                probabilities = self.model.aggregate_probabilities(
+                    list(frame_probabilities), self.multiframe_aggregation)
+            else:
+                probabilities = frame_probabilities[0]
+            tags, tag_probabilities = self.model.probabilities_to_tags(
+                probabilities, self.pixai_tagger_settings)
+            captions.append(self.format_caption(tags, tag_probabilities))
+        return captions

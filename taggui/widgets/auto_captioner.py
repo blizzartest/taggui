@@ -178,10 +178,18 @@ class CaptionSettingsForm(QVBoxLayout):
             key='pixai_tagger_show_probabilities', default=True)
         self.pixai_max_tags_spin_box = FocusedScrollSettingsSpinBox(
             key='pixai_tagger_max_tags', default=30, minimum=1, maximum=999)
+        self.pixai_batch_size_spin_box = FocusedScrollSettingsSpinBox(
+            key='pixai_tagger_batch_size', default=8, minimum=1, maximum=64)
+        self.pixai_batch_size_spin_box.setToolTip(
+            'Number of images run through the tagger per inference. Higher '
+            'values better utilize the GPU at the cost of more VRAM. Set to 1 '
+            'to caption images one at a time.')
         pixai_tagger_settings_form.addRow(
             'Show probabilities', self.pixai_show_probabilities_check_box)
         pixai_tagger_settings_form.addRow('Maximum tags',
                                           self.pixai_max_tags_spin_box)
+        pixai_tagger_settings_form.addRow('Batch size',
+                                         self.pixai_batch_size_spin_box)
         self.pixai_category_include_check_boxes = {}
         self.pixai_min_probability_spin_boxes = {}
         # A minimum probability of 0 means the model's recommended
@@ -487,6 +495,7 @@ class CaptionSettingsForm(QVBoxLayout):
                 'show_probabilities':
                     self.pixai_show_probabilities_check_box.isChecked(),
                 'max_tags': self.pixai_max_tags_spin_box.value(),
+                'batch_size': self.pixai_batch_size_spin_box.value(),
                 'tags_to_exclude':
                     self.pixai_tags_to_exclude_text_edit.toPlainText(),
                 'multiframe_enabled':
