@@ -849,7 +849,10 @@ class MainWindow(QMainWindow):
             return
         dialog = TagStatisticsDialog(tag, self.image_list_model.images,
                                      parent=self, tokenizer=self.tokenizer,
-                                     directory_path=self.directory_path)
+                                     directory_path=self.directory_path,
+                                     count_folders_from_disk=(
+                                         self.image_list_model.load_mode
+                                         == 'tags_only'))
         dialog.image_list_month_filter_requested.connect(
             self.filter_images_for_tag_month)
         dialog.image_list_filter_addition_requested.connect(

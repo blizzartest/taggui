@@ -1,6 +1,7 @@
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import (QColor, QPalette, QPainter, QPen)
@@ -9,7 +10,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout,
                                QLabel, QMenu, QScrollArea, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
-from utils.settings import get_settings, get_tag_separator
+from utils.settings import (DEFAULT_SETTINGS, get_settings,
+                            get_tag_separator)
 
 CHART_MARGIN_LEFT = 60
 CHART_MARGIN_RIGHT = 30
@@ -108,8 +110,27 @@ def get_image_folder(image_path, directory_path) -> str:
     return str(folder_path)
 
 
+def count_image_files_in_folder(folder_path) -> int:
+    """Count the image files in a folder according to the configured image
+    file formats."""
+    settings = get_settings()
+    image_suffixes_string = settings.value(
+        'image_list_file_formats',
+        defaultValue=DEFAULT_SETTINGS['image_list_file_formats'], type=str)
+    image_suffixes = {
+        suffix.strip().lower().lstrip('.')
+        for suffix in image_suffixes_string.split(',') if suffix.strip()}
+    try:
+        return sum(1 for entry in folder_path.iterdir()
+                   if entry.is_file()
+                   and entry.suffix.lower().lstrip('.') in image_suffixes)
+    except OSError:
+        return 0
+
+
 def calculate_tag_statistics(tag: str, images: list, tokenizer=None,
-                              directory_path=None) -> TagStatistics:
+                              directory_path=None,
+                              count_folders_from_disk=False) -> TagStatistics:
     tagged_images = [image for image in images if image.tags]
     tag_images = [image for image in images if tag in image.tags]
     co_occurrence_counts = Counter()
@@ -128,12 +149,23 @@ def calculate_tag_statistics(tag: str, images: list, tokenizer=None,
         tag_image_counts.update(set(image.tags))
     folder_image_counts = Counter()
     folder_tag_counts = Counter()
-    for image in images:
-        folder_image_counts[get_image_folder(image.path,
-                                              directory_path)] += 1
     for image in tag_images:
         folder_tag_counts[get_image_folder(image.path,
                                             directory_path)] += 1
+    if count_folders_from_disk:
+        # In tags-only mode, only the loaded images are known, so the folder
+        # image counts are taken from the folders on disk instead.
+        for folder in folder_tag_counts:
+            if directory_path is None:
+                folder_path = Path(folder)
+            else:
+                folder_path = directory_path / folder
+            folder_image_counts[folder] = count_image_files_in_folder(
+                folder_path)
+    else:
+        for image in images:
+            folder_image_counts[get_image_folder(image.path,
+                                                  directory_path)] += 1
     tag_variants = get_tag_variants(tag, tag_image_counts)
     tag_token_count = None
     average_caption_tokens_with_tag = None
@@ -364,11 +396,12 @@ class TagStatisticsDialog(QDialog):
     image_list_filter_addition_requested = Signal(str)
 
     def __init__(self, tag: str, images: list, parent=None, tokenizer=None,
-                 directory_path=None):
+                 directory_path=None, count_folders_from_disk=False):
         super().__init__(parent)
         self.tag = tag
         self.statistics = calculate_tag_statistics(tag, images, tokenizer,
-                                                   directory_path)
+                                                   directory_path,
+                                                   count_folders_from_disk)
         self.setWindowTitle(f'Tag Statistics: {tag}')
         self.setModal(True)
 
