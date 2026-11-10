@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame,
                                QLabel, QMenu, QScrollArea, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
-from utils.settings import get_settings
+from utils.settings import get_settings, get_tag_separator
 
 CHART_MARGIN_LEFT = 60
 CHART_MARGIN_RIGHT = 30
@@ -37,9 +37,76 @@ class TagStatistics:
     tag_image_counts: Counter
     creation_month_counts: dict[str, int]
     modification_month_counts: dict[str, int]
+    folder_image_counts: Counter
+    folder_tag_counts: Counter
+    tag_variants: list
+    tag_token_count: int | None
+    average_caption_tokens_with_tag: float | None
 
 
-def calculate_tag_statistics(tag: str, images: list) -> TagStatistics:
+def get_token_count(tokenizer, text: str) -> int:
+    """Get the token count of a text, subtracting the start-of-text and
+    end-of-text tokens."""
+    return len(tokenizer(text).input_ids) - 2
+
+
+def get_month_range_summary(month_counts: dict[str, int]):
+    """Get the first month, last month and trend ('Rising', 'Falling' or
+    'Steady') of a month count dictionary, or None if it is empty."""
+    months = sorted(month_counts)
+    if not months:
+        return None
+    first_month = months[0]
+    last_month = months[-1]
+    trend = 'Steady'
+    if len(months) > 1:
+        middle = len(months) // 2
+        first_half_count = sum(month_counts[month]
+                               for month in months[:middle])
+        second_half_count = sum(month_counts[month]
+                                for month in months[middle:])
+        if second_half_count > first_half_count * 1.2:
+            trend = 'Rising'
+        elif first_half_count > second_half_count * 1.2:
+            trend = 'Falling'
+    return first_month, last_month, trend
+
+
+def get_tag_variants(tag: str, tag_image_counts: Counter) -> list:
+    """Find near-duplicate variants of a tag in a tag image count
+    dictionary: case variants, underscore/space variants, and simple
+    singular/plural variants."""
+    normalized_tag = tag.lower().strip().replace(' ', '_')
+    singular_tag = normalized_tag.rstrip('es') if normalized_tag.endswith(
+        'es') else normalized_tag.rstrip('s')
+    variants = []
+    for other_tag, count in tag_image_counts.items():
+        if other_tag == tag:
+            continue
+        normalized_other_tag = other_tag.lower().strip().replace(' ', '_')
+        singular_other_tag = (normalized_other_tag.rstrip('es')
+                              if normalized_other_tag.endswith('es')
+                              else normalized_other_tag.rstrip('s'))
+        if (normalized_other_tag == normalized_tag
+                or singular_other_tag == singular_tag):
+            variants.append((other_tag, count))
+    return variants
+
+
+def get_image_folder(image_path, directory_path) -> str:
+    """Get the folder an image is in, relative to the loaded directory if
+    possible."""
+    folder_path = image_path.parent
+    if directory_path is not None:
+        try:
+            folder_path = folder_path.relative_to(directory_path)
+        except ValueError:
+            pass
+    return str(folder_path)
+
+
+def calculate_tag_statistics(tag: str, images: list, tokenizer=None,
+                              directory_path=None) -> TagStatistics:
     tagged_images = [image for image in images if image.tags]
     tag_images = [image for image in images if tag in image.tags]
     co_occurrence_counts = Counter()
@@ -56,6 +123,25 @@ def calculate_tag_statistics(tag: str, images: list) -> TagStatistics:
         if image.tags and tag not in image.tags)
     for image in tagged_images:
         tag_image_counts.update(set(image.tags))
+    folder_image_counts = Counter()
+    folder_tag_counts = Counter()
+    for image in images:
+        folder_image_counts[get_image_folder(image.path,
+                                              directory_path)] += 1
+    for image in tag_images:
+        folder_tag_counts[get_image_folder(image.path,
+                                            directory_path)] += 1
+    tag_variants = get_tag_variants(tag, tag_image_counts)
+    tag_token_count = None
+    average_caption_tokens_with_tag = None
+    if tokenizer is not None and tag_images:
+        tag_token_count = get_token_count(tokenizer, tag)
+        tag_separator = get_tag_separator()
+        caption_token_counts = [
+            get_token_count(tokenizer, tag_separator.join(image.tags))
+            for image in tag_images]
+        average_caption_tokens_with_tag = (sum(caption_token_counts)
+                                           / len(caption_token_counts))
 
     creation_month_counts = {}
     modification_month_counts = {}
@@ -90,7 +176,12 @@ def calculate_tag_statistics(tag: str, images: list) -> TagStatistics:
         co_occurrence_counts=co_occurrence_counts,
         tag_image_counts=tag_image_counts,
         creation_month_counts=creation_month_counts,
-        modification_month_counts=modification_month_counts)
+        modification_month_counts=modification_month_counts,
+        folder_image_counts=folder_image_counts,
+        folder_tag_counts=folder_tag_counts,
+        tag_variants=tag_variants,
+        tag_token_count=tag_token_count,
+        average_caption_tokens_with_tag=average_caption_tokens_with_tag)
 
 
 class TrendChart(QWidget):
@@ -269,10 +360,12 @@ class TagStatisticsDialog(QDialog):
     image_list_month_filter_requested = Signal(str, str, str)
     image_list_filter_addition_requested = Signal(str)
 
-    def __init__(self, tag: str, images: list, parent=None):
+    def __init__(self, tag: str, images: list, parent=None, tokenizer=None,
+                 directory_path=None):
         super().__init__(parent)
         self.tag = tag
-        self.statistics = calculate_tag_statistics(tag, images)
+        self.statistics = calculate_tag_statistics(tag, images, tokenizer,
+                                                   directory_path)
         self.setWindowTitle(f'Tag Statistics: {tag}')
         self.setModal(True)
 
@@ -283,9 +376,14 @@ class TagStatisticsDialog(QDialog):
         header_label = QLabel(f'<h1>{tag}</h1>')
         content_layout.addWidget(header_label)
 
-        content_layout.addWidget(self.create_summary_group())
-        content_layout.addWidget(self.create_trend_group())
-        content_layout.addWidget(self.create_co_occurrence_group())
+        for group in (self.create_summary_group(),
+                      self.create_trend_group(),
+                      self.create_co_occurrence_group(),
+                      self.create_antagonistic_tags_group(),
+                      self.create_tag_hygiene_group(),
+                      self.create_folder_usage_group()):
+            if group is not None:
+                content_layout.addWidget(group)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -335,6 +433,25 @@ class TagStatisticsDialog(QDialog):
             else f'{statistics.average_tag_count_without_tag:.2f}')
         form_layout.addRow('Average tag count (images without tag):',
                           QLabel(without_tag_text))
+        if statistics.tag_token_count is not None:
+            form_layout.addRow('Tag token count:',
+                              QLabel(str(statistics.tag_token_count)))
+        if statistics.average_caption_tokens_with_tag is not None:
+            form_layout.addRow(
+                'Average caption tokens (images with tag):',
+                QLabel(f'{statistics.average_caption_tokens_with_tag:.1f}'))
+        for date_type, month_counts in (
+                ('created', statistics.creation_month_counts),
+                ('modified', statistics.modification_month_counts)):
+            range_summary = get_month_range_summary(month_counts)
+            if range_summary is None:
+                continue
+            first_month, last_month, trend = range_summary
+            form_layout.addRow(f'First seen ({date_type}):',
+                              QLabel(first_month))
+            form_layout.addRow(f'Last seen ({date_type}):',
+                              QLabel(last_month))
+            form_layout.addRow(f'Trend ({date_type}):', QLabel(trend))
         return group_box
 
     def create_trend_group(self) -> QGroupBox:
@@ -417,9 +534,10 @@ class TagStatisticsDialog(QDialog):
         table = CoOccurrenceTable()
         table.tag_addition_requested.connect(
             self.image_list_filter_addition_requested.emit)
-        table.setColumnCount(4)
+        table.setColumnCount(5)
         table.setHorizontalHeaderLabels(
-            ['Tag', 'Count', '% of Images With Tag', 'Lift'])
+            ['Tag', 'Count', '% of Images With Tag', '% of Co-Tag Images',
+             'Lift'])
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setAlternatingRowColors(True)
@@ -436,13 +554,128 @@ class TagStatisticsDialog(QDialog):
             # Lift is the co-occurrence frequency relative to the frequency
             # expected if the tags were independent.
             co_tag_image_count = statistics.tag_image_counts[co_tag]
+            reverse_percentage = (100 * count / co_tag_image_count
+                                  if co_tag_image_count else 0)
             lift = 0.0
             if (tagged_image_count > 0 and tag_image_count > 0
                     and co_tag_image_count > 0):
                 lift = ((count / tagged_image_count)
                         / ((tag_image_count / tagged_image_count)
                            * (co_tag_image_count / tagged_image_count)))
-            values = (co_tag, str(count), f'{percentage:.1f}%', f'{lift:.2f}')
+            values = (co_tag, str(count), f'{percentage:.1f}%',
+                      f'{reverse_percentage:.1f}%', f'{lift:.2f}')
+            for column_number, value in enumerate(values):
+                table.setItem(row_number, column_number,
+                              QTableWidgetItem(value))
+        table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch)
+        group_layout.addWidget(table)
+        return group_box
+
+    def create_antagonistic_tags_group(self) -> QGroupBox | None:
+        """Create a group listing tags that co-occur with the tag less often
+        than would be expected by chance, or None if there are none."""
+        statistics = self.statistics
+        antagonistic_tags = []
+        tagged_image_count = statistics.tagged_image_count
+        tag_image_count = statistics.tag_image_count
+        if tagged_image_count > 0 and tag_image_count > 0:
+            tag_probability = tag_image_count / tagged_image_count
+            for other_tag, other_tag_image_count in (
+                    statistics.tag_image_counts.items()):
+                if other_tag == self.tag:
+                    continue
+                expected_count = (tag_probability * other_tag_image_count)
+                if expected_count < 2:
+                    continue
+                actual_count = statistics.co_occurrence_counts[other_tag]
+                if actual_count < expected_count:
+                    antagonistic_tags.append((other_tag, actual_count,
+                                              expected_count))
+            antagonistic_tags.sort(key=lambda entry: (
+                entry[1] / entry[2], entry[0]))
+            antagonistic_tags = antagonistic_tags[:15]
+        if not antagonistic_tags:
+            return None
+        group_box = QGroupBox('Antagonistic Tags (Less Common Together '
+                              'Than Expected)')
+        group_layout = QVBoxLayout(group_box)
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(
+            ['Tag', 'Count', 'Expected Count', 'Lift'])
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        table.setRowCount(len(antagonistic_tags))
+        for row_number, (other_tag, actual_count,
+                         expected_count) in enumerate(antagonistic_tags):
+            lift = actual_count / expected_count
+            values = (other_tag, str(actual_count), f'{expected_count:.1f}',
+                      f'{lift:.2f}')
+            for column_number, value in enumerate(values):
+                table.setItem(row_number, column_number,
+                              QTableWidgetItem(value))
+        table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch)
+        group_layout.addWidget(table)
+        return group_box
+
+    def create_tag_hygiene_group(self) -> QGroupBox | None:
+        """Create a group listing near-duplicate variants of the tag, or
+        None if there are none."""
+        tag_variants = self.statistics.tag_variants
+        if not tag_variants:
+            return None
+        group_box = QGroupBox('Tag Hygiene (Near-Duplicate Variants)')
+        group_layout = QVBoxLayout(group_box)
+        group_layout.addWidget(QLabel(
+            'These near-duplicate variants of the tag also exist in the '
+            'dataset and may be worth merging or renaming.'))
+        table = QTableWidget()
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(['Variant', 'Count'])
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        table.setRowCount(len(tag_variants))
+        for row_number, (variant, count) in enumerate(tag_variants):
+            for column_number, value in enumerate((variant, str(count))):
+                table.setItem(row_number, column_number,
+                              QTableWidgetItem(value))
+        table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch)
+        group_layout.addWidget(table)
+        return group_box
+
+    def create_folder_usage_group(self) -> QGroupBox | None:
+        """Create a group showing the tag usage per folder, or None if the
+        tag does not appear in any folder."""
+        statistics = self.statistics
+        folder_tag_counts = statistics.folder_tag_counts
+        if not folder_tag_counts:
+            return None
+        group_box = QGroupBox('Usage by Folder')
+        group_layout = QVBoxLayout(group_box)
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(
+            ['Folder', 'Count', '% of Folder Images'])
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        folders = sorted(folder_tag_counts,
+                         key=folder_tag_counts.get, reverse=True)
+        table.setRowCount(len(folders))
+        for row_number, folder in enumerate(folders):
+            tag_count = folder_tag_counts[folder]
+            folder_image_count = statistics.folder_image_counts[folder]
+            percentage = (100 * tag_count / folder_image_count
+                          if folder_image_count else 0)
+            values = (folder, str(tag_count), f'{percentage:.1f}%')
             for column_number, value in enumerate(values):
                 table.setItem(row_number, column_number,
                               QTableWidgetItem(value))

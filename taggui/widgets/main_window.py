@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
             defaultValue=DEFAULT_SETTINGS['load_mode'], type=str)
         tokenizer = AutoTokenizer.from_pretrained(
             get_resource_path(TOKENIZER_DIRECTORY_PATH))
+        self.tokenizer = tokenizer
         self.proxy_image_list_model = ProxyImageListModel(
             self.image_list_model, tokenizer, tag_separator)
         self.image_list_model.proxy_image_list_model = (
@@ -847,7 +848,8 @@ class MainWindow(QMainWindow):
         if not self.image_list_model.images:
             return
         dialog = TagStatisticsDialog(tag, self.image_list_model.images,
-                                     parent=self)
+                                     parent=self, tokenizer=self.tokenizer,
+                                     directory_path=self.directory_path)
         dialog.image_list_month_filter_requested.connect(
             self.filter_images_for_tag_month)
         dialog.image_list_filter_addition_requested.connect(
