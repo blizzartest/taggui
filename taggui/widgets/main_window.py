@@ -129,6 +129,9 @@ class MainWindow(QMainWindow):
         self.load_mode_full_action.setCheckable(True)
         self.load_mode_tags_only_action = QAction('Tags Only', parent=self)
         self.load_mode_tags_only_action.setCheckable(True)
+        self.load_mode_untagged_only_action = QAction('Untagged Only',
+                                                      parent=self)
+        self.load_mode_untagged_only_action.setCheckable(True)
         self.create_menus()
         # Initialize load mode from settings
         self.update_load_mode_actions()
@@ -506,6 +509,7 @@ class MainWindow(QMainWindow):
         load_mode_menu = view_menu.addMenu('Load Mode')
         load_mode_menu.addAction(self.load_mode_full_action)
         load_mode_menu.addAction(self.load_mode_tags_only_action)
+        load_mode_menu.addAction(self.load_mode_untagged_only_action)
 
         theme_menu = view_menu.addMenu('Theme')
         self.theme_actions = []
@@ -616,10 +620,11 @@ class MainWindow(QMainWindow):
 
     def update_tag_counter(self):
         """
-        In tags-only mode, show all tags from the tag index in the all tags
-        list; otherwise show the tags of the currently loaded images.
+        In tags-only and untagged-only mode, show all tags from the tag index
+        in the all tags list; otherwise show the tags of the currently loaded
+        images.
         """
-        if (self.image_list_model.load_mode == 'tags_only'
+        if (self.image_list_model.load_mode in ('tags_only', 'untagged_only')
                 and self.image_list_model.tag_index):
             self.tag_counter_model.count_indexed_tags(
                 self.image_list_model.tag_index)
@@ -856,6 +861,8 @@ class MainWindow(QMainWindow):
             self.set_load_mode_full)
         self.load_mode_tags_only_action.triggered.connect(
             self.set_load_mode_tags_only)
+        self.load_mode_untagged_only_action.triggered.connect(
+            self.set_load_mode_untagged_only)
 
     def update_load_mode_from_settings(self):
         """Initialize load mode from settings."""
@@ -870,6 +877,8 @@ class MainWindow(QMainWindow):
         current_mode = self.image_list_model.load_mode
         self.load_mode_full_action.setChecked(current_mode == 'full')
         self.load_mode_tags_only_action.setChecked(current_mode == 'tags_only')
+        self.load_mode_untagged_only_action.setChecked(
+            current_mode == 'untagged_only')
 
     @Slot()
     def set_load_mode_full(self):
@@ -885,6 +894,15 @@ class MainWindow(QMainWindow):
         if self.image_list_model.load_mode != 'tags_only':
             self.image_list_model.load_mode = 'tags_only'
             self.settings.setValue('load_mode', 'tags_only')
+            self.update_load_mode_actions()
+            if self.directory_path:
+                self.load_directory(self.directory_path)
+
+    @Slot()
+    def set_load_mode_untagged_only(self):
+        if self.image_list_model.load_mode != 'untagged_only':
+            self.image_list_model.load_mode = 'untagged_only'
+            self.settings.setValue('load_mode', 'untagged_only')
             self.update_load_mode_actions()
             if self.directory_path:
                 self.load_directory(self.directory_path)
