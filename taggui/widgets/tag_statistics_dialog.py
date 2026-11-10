@@ -4,8 +4,8 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import (QColor, QPalette, QPainter, QPen)
-from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame,
-                               QGroupBox, QHBoxLayout, QHeaderView,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout,
+                               QFrame, QGroupBox, QHBoxLayout, QHeaderView,
                                QLabel, QMenu, QScrollArea, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -21,6 +21,9 @@ MODIFICATION_COLOR = QColor('#ffb74d')
 GEOMETRY_SETTINGS_KEY = 'tag_statistics_dialog_geometry'
 SHOW_CREATION_SETTINGS_KEY = 'tag_statistics_show_creation'
 SHOW_MODIFICATION_SETTINGS_KEY = 'tag_statistics_show_modification'
+FOLDER_SORT_MODE_SETTINGS_KEY = 'tag_statistics_folder_sort_mode'
+SORT_BY_COUNT = 'Count'
+SORT_BY_PERCENTAGE = '% of Folder Images'
 
 MONTH_FORMAT = '%Y-%m'
 
@@ -679,18 +682,49 @@ class TagStatisticsDialog(QDialog):
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
-        folders = sorted(folder_tag_counts,
-                         key=folder_tag_counts.get, reverse=True)
-        table.setRowCount(len(folders))
-        for row_number, folder in enumerate(folders):
-            tag_count = folder_tag_counts[folder]
+        settings = get_settings()
+        sort_mode = settings.value(FOLDER_SORT_MODE_SETTINGS_KEY,
+                                   defaultValue=SORT_BY_COUNT, type=str)
+        if sort_mode not in (SORT_BY_COUNT, SORT_BY_PERCENTAGE):
+            sort_mode = SORT_BY_COUNT
+
+        def get_folder_percentage(folder: str) -> float:
             folder_image_count = statistics.folder_image_counts[folder]
-            percentage = (100 * tag_count / folder_image_count
-                          if folder_image_count else 0)
-            values = (folder, str(tag_count), f'{percentage:.1f}%')
-            for column_number, value in enumerate(values):
-                table.setItem(row_number, column_number,
-                              QTableWidgetItem(value))
-        self.finalize_table(table)
+            if not folder_image_count:
+                return 0
+            return folder_tag_counts[folder] / folder_image_count
+
+        def populate_table(sort_mode: str):
+            if sort_mode == SORT_BY_PERCENTAGE:
+                key = get_folder_percentage
+            else:
+                key = folder_tag_counts.get
+            folders = sorted(folder_tag_counts, key=key, reverse=True)
+            table.setRowCount(len(folders))
+            for row_number, folder in enumerate(folders):
+                tag_count = folder_tag_counts[folder]
+                folder_image_count = statistics.folder_image_counts[folder]
+                percentage = (100 * tag_count / folder_image_count
+                              if folder_image_count else 0)
+                values = (folder, str(tag_count), f'{percentage:.1f}%')
+                for column_number, value in enumerate(values):
+                    table.setItem(row_number, column_number,
+                                  QTableWidgetItem(value))
+            self.finalize_table(table)
+
+        def handle_sort_mode_change(new_sort_mode: str):
+            settings.setValue(FOLDER_SORT_MODE_SETTINGS_KEY, new_sort_mode)
+            populate_table(new_sort_mode)
+
+        sort_combo_box = QComboBox()
+        sort_combo_box.addItems([SORT_BY_COUNT, SORT_BY_PERCENTAGE])
+        sort_combo_box.setCurrentText(sort_mode)
+        sort_combo_box.currentTextChanged.connect(handle_sort_mode_change)
+        sort_layout = QHBoxLayout()
+        sort_layout.addWidget(QLabel('Sort by:'))
+        sort_layout.addWidget(sort_combo_box)
+        sort_layout.addStretch()
+        group_layout.addLayout(sort_layout)
+        populate_table(sort_mode)
         group_layout.addWidget(table)
         return group_box
