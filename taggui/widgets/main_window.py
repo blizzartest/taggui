@@ -848,8 +848,32 @@ class MainWindow(QMainWindow):
             return
         dialog = TagStatisticsDialog(tag, self.image_list_model.images,
                                      parent=self)
-        dialog.showMaximized()
-        dialog.exec()
+        dialog.image_list_month_filter_requested.connect(
+            self.filter_images_for_tag_month)
+        dialog.image_list_filter_addition_requested.connect(
+            self.add_tag_to_image_list_filter_text)
+        if dialog.restore_geometry():
+            dialog.exec()
+        else:
+            dialog.showMaximized()
+            dialog.exec()
+
+    @Slot(str, str, str)
+    def filter_images_for_tag_month(self, tag: str, month: str,
+                                    date_type: str):
+        """Filter the image list for images with a tag from a given month,
+        based on either their creation or modification date."""
+        filter_line_edit = self.image_list.filter_line_edit
+        if filter_line_edit.syntax == 'Danbooru':
+            # The Danbooru search syntax has no date filters, so only the tag
+            # can be searched for.
+            filter_line_edit.setText(quote_tag_for_danbooru_search(tag))
+        else:
+            escaped_tag = (tag.replace('\\', '\\\\')
+                           .replace('"', r'\"').replace("'", r"\'"))
+            filter_line_edit.setText(
+                f'tag:"{escaped_tag}" AND {date_type}:{month}')
+        self.set_image_list_filter()
 
     def connect_auto_captioner_signals(self):
         self.auto_captioner.caption_generated.connect(

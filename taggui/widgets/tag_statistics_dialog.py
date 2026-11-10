@@ -2,19 +2,25 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import (QColor, QPalette, QPainter, QPen)
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame,
                                QGroupBox, QHBoxLayout, QHeaderView,
-                               QLabel, QScrollArea, QTableWidget,
+                               QLabel, QMenu, QScrollArea, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
+
+from utils.settings import get_settings
 
 CHART_MARGIN_LEFT = 60
 CHART_MARGIN_RIGHT = 30
 CHART_MARGIN_TOP = 20
 CHART_MARGIN_BOTTOM = 40
+POINT_CLICK_RADIUS = 12
 CREATION_COLOR = QColor('#4fc3f7')
 MODIFICATION_COLOR = QColor('#ffb74d')
+GEOMETRY_SETTINGS_KEY = 'tag_statistics_dialog_geometry'
+SHOW_CREATION_SETTINGS_KEY = 'tag_statistics_show_creation'
+SHOW_MODIFICATION_SETTINGS_KEY = 'tag_statistics_show_modification'
 
 MONTH_FORMAT = '%Y-%m'
 
@@ -90,8 +96,11 @@ def calculate_tag_statistics(tag: str, images: list) -> TagStatistics:
 class TrendChart(QWidget):
     """
     A line chart showing the number of images containing the tag per month,
-    with separate series for the creation and modification dates.
+    with separate series for the creation and modification dates. Clicking a
+    point emits `point_clicked` with the month and date type of the point.
     """
+
+    point_clicked = Signal(str, str)
 
     def __init__(self):
         super().__init__()
@@ -100,7 +109,10 @@ class TrendChart(QWidget):
         self.modification_counts = []
         self.show_creation = True
         self.show_modification = True
+        self.creation_points = []
+        self.modification_points = []
         self.setMinimumHeight(300)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def set_data(self, months: list[str],
                  creation_counts: list[int],
@@ -115,6 +127,40 @@ class TrendChart(QWidget):
         self.show_creation = show_creation
         self.show_modification = show_modification
         self.update()
+
+    def get_series_points(self, counts: list[int], chart_width: int,
+                          chart_height: int, max_count: int) -> list[tuple]:
+        points = []
+        for month_number, count in enumerate(counts):
+            if len(counts) > 1:
+                x = (CHART_MARGIN_LEFT
+                     + chart_width * month_number / (len(counts) - 1))
+            else:
+                x = CHART_MARGIN_LEFT + chart_width / 2
+            y = (CHART_MARGIN_TOP + chart_height
+                 - chart_height * count / max_count)
+            points.append((x, y))
+        return points
+
+    def mousePressEvent(self, event):
+        """Emit `point_clicked` for the nearest visible point, if any."""
+        series = []
+        if self.show_creation:
+            series.append((self.creation_points, 'created'))
+        if self.show_modification:
+            series.append((self.modification_points, 'modified'))
+        nearest = None
+        nearest_distance = POINT_CLICK_RADIUS
+        for points, date_type in series:
+            for month_number, (x, y) in enumerate(points):
+                distance = ((event.position().x() - x) ** 2
+                            + (event.position().y() - y) ** 2) ** 0.5
+                if distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest = (month_number, date_type)
+        if nearest is not None:
+            month_number, date_type = nearest
+            self.point_clicked.emit(self.months[month_number], date_type)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -174,16 +220,8 @@ class TrendChart(QWidget):
             pen.setColor(color)
             pen.setWidth(2)
             painter.setPen(pen)
-            points = []
-            for month_number, count in enumerate(counts):
-                if len(counts) > 1:
-                    x = (CHART_MARGIN_LEFT
-                         + chart_width * month_number / (len(counts) - 1))
-                else:
-                    x = CHART_MARGIN_LEFT + chart_width / 2
-                y = (CHART_MARGIN_TOP + chart_height
-                     - chart_height * count / max_count)
-                points.append((x, y))
+            points = self.get_series_points(counts, chart_width, chart_height,
+                                            max_count)
             for point_number in range(len(points) - 1):
                 painter.drawLine(int(points[point_number][0]),
                                  int(points[point_number][1]),
@@ -193,6 +231,10 @@ class TrendChart(QWidget):
                 painter.setBrush(color)
                 painter.drawEllipse(int(x) - 3, int(y) - 3, 6, 6)
 
+        self.creation_points = self.get_series_points(
+            self.creation_counts, chart_width, chart_height, max_count)
+        self.modification_points = self.get_series_points(
+            self.modification_counts, chart_width, chart_height, max_count)
         if self.show_creation:
             draw_series(self.creation_counts, CREATION_COLOR)
         if self.show_modification:
@@ -200,10 +242,32 @@ class TrendChart(QWidget):
         painter.end()
 
 
+class CoOccurrenceTable(QTableWidget):
+    """A table of co-occurring tags with a context menu for adding a tag to
+    the image list search."""
+
+    tag_addition_requested = Signal(str)
+
+    def contextMenuEvent(self, event):
+        clicked_row = self.rowAt(event.pos().y())
+        if clicked_row < 0:
+            return
+        item = self.item(clicked_row, 0)
+        if item is None:
+            return
+        tag = item.text()
+        context_menu = QMenu(self)
+        context_menu.addAction(
+            'Add to Search', lambda: self.tag_addition_requested.emit(tag))
+        context_menu.exec_(event.globalPos())
+
+
 class TagStatisticsDialog(QDialog):
     """A fullscreen dialog showing statistics for a single tag."""
 
     CO_OCCURRENCE_TAG_COUNT = 50
+    image_list_month_filter_requested = Signal(str, str, str)
+    image_list_filter_addition_requested = Signal(str)
 
     def __init__(self, tag: str, images: list, parent=None):
         super().__init__(parent)
@@ -228,6 +292,20 @@ class TagStatisticsDialog(QDialog):
         scroll_area.setWidget(content_widget)
         layout = QVBoxLayout(self)
         layout.addWidget(scroll_area)
+
+    def done(self, result):
+        """Save the window geometry so that the last used size is restored
+        the next time the dialog is opened."""
+        get_settings().setValue(GEOMETRY_SETTINGS_KEY, self.saveGeometry())
+        super().done(result)
+
+    def restore_geometry(self) -> bool:
+        """Restore the saved window geometry, returning whether it existed."""
+        geometry = get_settings().value(GEOMETRY_SETTINGS_KEY)
+        if geometry is None:
+            return False
+        self.restoreGeometry(geometry)
+        return True
 
     def create_summary_group(self) -> QGroupBox:
         statistics = self.statistics
@@ -280,17 +358,27 @@ class TagStatisticsDialog(QDialog):
         chart.set_data(months, creation_counts, modification_counts)
 
         legend_layout = QHBoxLayout()
+        settings = get_settings()
         creation_check_box = QCheckBox('Creation Date')
-        creation_check_box.setChecked(True)
+        creation_check_box.setChecked(settings.value(
+            SHOW_CREATION_SETTINGS_KEY, defaultValue=True, type=bool))
         modification_check_box = QCheckBox('Modification Date')
-        modification_check_box.setChecked(True)
+        modification_check_box.setChecked(settings.value(
+            SHOW_MODIFICATION_SETTINGS_KEY, defaultValue=True, type=bool))
 
         def handle_visibility_change():
-            chart.set_series_visibility(
-                creation_check_box.isChecked(),
-                modification_check_box.isChecked())
+            show_creation = creation_check_box.isChecked()
+            show_modification = modification_check_box.isChecked()
+            settings.setValue(SHOW_CREATION_SETTINGS_KEY, show_creation)
+            settings.setValue(SHOW_MODIFICATION_SETTINGS_KEY,
+                             show_modification)
+            chart.set_series_visibility(show_creation, show_modification)
+
         creation_check_box.toggled.connect(handle_visibility_change)
         modification_check_box.toggled.connect(handle_visibility_change)
+        chart.set_series_visibility(creation_check_box.isChecked(),
+                                    modification_check_box.isChecked())
+        chart.point_clicked.connect(self.handle_chart_point_clicked)
 
         creation_legend = QFrame()
         creation_legend.setFixedSize(16, 16)
@@ -309,7 +397,14 @@ class TagStatisticsDialog(QDialog):
 
         group_layout.addLayout(legend_layout)
         group_layout.addWidget(chart)
+        hint_label = QLabel('Click a point to filter the image list for '
+                            'images with this tag from that month.')
+        group_layout.addWidget(hint_label)
         return group_box
+
+    def handle_chart_point_clicked(self, month: str, date_type: str):
+        self.image_list_month_filter_requested.emit(self.tag, month, date_type)
+        self.accept()
 
     def create_co_occurrence_group(self) -> QGroupBox:
         group_box = QGroupBox('Most Associated Tags')
@@ -319,7 +414,9 @@ class TagStatisticsDialog(QDialog):
             group_layout.addWidget(QLabel('No other tags co-occur with this '
                                           'tag.'))
             return group_box
-        table = QTableWidget()
+        table = CoOccurrenceTable()
+        table.tag_addition_requested.connect(
+            self.image_list_filter_addition_requested.emit)
         table.setColumnCount(4)
         table.setHorizontalHeaderLabels(
             ['Tag', 'Count', '% of Images With Tag', 'Lift'])

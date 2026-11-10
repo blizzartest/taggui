@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDockWidget,
                                QListView, QMenu, QMessageBox, QStyledItemDelegate,
                                QVBoxLayout, QWidget)
 from pyparsing import (CaselessKeyword, CaselessLiteral, Group, OpAssoc,
-                       ParseException, QuotedString, Suppress, Word,
+                       ParseException, QuotedString, Regex, Suppress, Word,
                        infix_notation, nums, one_of, printables)
 
 from models.proxy_image_list_model import ProxyImageListModel
@@ -68,9 +68,17 @@ class FilterLineEdit(QLineEdit):
         number_filter_expressions = [Group(CaselessLiteral(key) + Suppress(':')
                                            + comparison_operator + Word(nums))
                                      for key in number_filter_keys]
+        month_filter_keys = ['created', 'modified']
+        month_filter_expressions = [Group(CaselessLiteral(key) + Suppress(':')
+                                          + Regex(r'\d{4}-\d{2}'))
+                                    for key in month_filter_keys]
         string_filter_expressions = reduce(or_, string_filter_expressions)
         number_filter_expressions = reduce(or_, number_filter_expressions)
-        filter_expressions = (string_filter_expressions
+        month_filter_expressions = reduce(or_, month_filter_expressions)
+        # The month filter expressions must come first so that e.g.
+        # `created:2024-05` is not parsed as a caption filter.
+        filter_expressions = (month_filter_expressions
+                              | string_filter_expressions
                               | number_filter_expressions
                               | untagged_filter_expression
                               | optionally_quoted_string)
