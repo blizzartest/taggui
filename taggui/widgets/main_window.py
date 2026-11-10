@@ -4,15 +4,16 @@ from PySide6.QtCore import (QKeyCombination, QModelIndex, QTimer, QUrl, Qt,
                             Slot)
 from PySide6.QtGui import (QAction, QCloseEvent, QDesktopServices, QIcon,
                            QKeySequence, QPixmap, QShortcut)
-from PySide6.QtWidgets import (QApplication, QFileDialog, QMainWindow,
-                               QMessageBox, QStackedWidget, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog,
+                               QMainWindow, QMessageBox, QStackedWidget,
+                               QVBoxLayout, QWidget)
 from transformers import AutoTokenizer
 
 from dialogs.batch_reorder_tags_dialog import BatchReorderTagsDialog
 from dialogs.export_metadata_dialog import ExportMetadataDialog
 from dialogs.find_and_replace_dialog import FindAndReplaceDialog
 from dialogs.find_duplicate_images_dialog import FindDuplicateImagesDialog
+from dialogs.load_previous_directory_dialog import LoadPreviousDirectoryDialog
 from dialogs.settings_dialog import SettingsDialog
 from models.image_list_model import ImageListModel
 from models.image_tag_list_model import ImageTagListModel
@@ -924,14 +925,15 @@ class MainWindow(QMainWindow):
             directory_path = Path(self.settings.value('directory_path',
                                                       type=str))
             if directory_path.is_dir():
-                # Ask user if they want to load the previous directory
-                reply = QMessageBox.question(
-                    self,
-                    'Load Previous Directory',
-                    f'Load the previously opened directory:\n{directory_path}\n\n'
-                    'This may take a while for large directories.',
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes
-                )
-                if reply == QMessageBox.StandardButton.Yes:
+                # Ask the user if they want to load the previous directory
+                # and with which load mode.
+                dialog = LoadPreviousDirectoryDialog(
+                    directory_path, self.image_list_model.load_mode, parent=self)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    set_load_mode = {
+                        'full': self.set_load_mode_full,
+                        'tags_only': self.set_load_mode_tags_only,
+                        'untagged_only': self.set_load_mode_untagged_only,
+                    }[dialog.selected_load_mode]
+                    set_load_mode()
                     self.load_directory(directory_path, select_index=image_index)
