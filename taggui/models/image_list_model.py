@@ -525,13 +525,18 @@ class ImageListModel(QAbstractListModel):
         self.build_tag_index(directory_path, image_suffixes, tags_subfolder,
                              image_paths, text_file_paths)
 
-        # Images with entries in the tag database may have a file format
-        # that is not in the configured image suffixes. Include them so
-        # that the image list is consistent between the load modes; the
-        # tag index in tags-only mode already contains them.
-        image_paths.update(self.tag_index)
+        if self.load_mode == 'untagged_only':
+            # Only load images that have no tags in the tag index.
+            image_paths = {path for path in image_paths
+                           if not self.tag_index.get(path)}
+        else:
+            # Images with entries in the tag database may have a file format
+            # that is not in the configured image suffixes. Include them so
+            # that the image list is consistent between the load modes; the
+            # tag index in tags-only mode already contains them.
+            image_paths.update(self.tag_index)
 
-        if self.load_mode == 'full':
+        if self.load_mode != 'tags_only':
             if self.tags_storage_mode == 'single_file':
                 # Tags come from the tag index (which is backed by the tag
                 # database), so no per-image caption files need to be read.

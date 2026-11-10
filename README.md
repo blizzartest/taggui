@@ -174,7 +174,9 @@ apply:
 Images that have an entry in the tag database are always included in the
 image list, even if their file format is not in the configured file formats
 (`File` -> `Settings` -> `File formats`). This keeps the image list
-consistent between the `Full` and `Tags Only` load modes.
+consistent between the `Full` and `Tags Only` load modes. In the
+`Untagged Only` load mode (`View` -> `Load Mode`), only images that have no
+tags in the tag database are loaded.
     - `untagged` will match images that do not have any tags.
 - You can also use a filter term with no prefix to filter for images that
   contain the term in either the caption or the file path.
