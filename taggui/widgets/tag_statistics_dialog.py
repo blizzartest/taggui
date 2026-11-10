@@ -3,10 +3,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import (QColor, QPalette, QPainter, QPen)
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame,
                                QGroupBox, QHBoxLayout, QHeaderView,
-                               QLabel, QPalette, QScrollArea, QTableWidget,
+                               QLabel, QScrollArea, QTableWidget,
                                QVBoxLayout, QWidget)
 
 CHART_MARGIN_LEFT = 60
