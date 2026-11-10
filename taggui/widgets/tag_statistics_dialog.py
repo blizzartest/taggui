@@ -405,6 +405,21 @@ class TagStatisticsDialog(QDialog):
         self.restoreGeometry(geometry)
         return True
 
+    def finalize_table(self, table: QTableWidget):
+        """Make a table show all of its rows at once, stretched to the
+        window width, with the dialog's scroll area handling the scrolling."""
+        table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch)
+        table.resizeColumnsToContents()
+        table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.resizeRowsToContents()
+        row_height = table.verticalHeader().defaultSectionSize()
+        table.setMinimumHeight(table.horizontalHeader().height()
+                                + row_height * table.rowCount() + 4)
+
     def create_summary_group(self) -> QGroupBox:
         statistics = self.statistics
         group_box = QGroupBox('Summary')
@@ -567,8 +582,7 @@ class TagStatisticsDialog(QDialog):
             for column_number, value in enumerate(values):
                 table.setItem(row_number, column_number,
                               QTableWidgetItem(value))
-        table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch)
+        self.finalize_table(table)
         group_layout.addWidget(table)
         return group_box
 
@@ -617,8 +631,7 @@ class TagStatisticsDialog(QDialog):
             for column_number, value in enumerate(values):
                 table.setItem(row_number, column_number,
                               QTableWidgetItem(value))
-        table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch)
+        self.finalize_table(table)
         group_layout.addWidget(table)
         return group_box
 
@@ -645,8 +658,7 @@ class TagStatisticsDialog(QDialog):
             for column_number, value in enumerate((variant, str(count))):
                 table.setItem(row_number, column_number,
                               QTableWidgetItem(value))
-        table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch)
+        self.finalize_table(table)
         group_layout.addWidget(table)
         return group_box
 
@@ -679,7 +691,6 @@ class TagStatisticsDialog(QDialog):
             for column_number, value in enumerate(values):
                 table.setItem(row_number, column_number,
                               QTableWidgetItem(value))
-        table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch)
+        self.finalize_table(table)
         group_layout.addWidget(table)
         return group_box
