@@ -2,15 +2,18 @@ from datetime import datetime
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image as PilImage
+from PIL.ImageOps import exif_transpose
 from transformers import AutoModel
+from transformers.utils.import_utils import is_torch_bf16_gpu_available
 
 import auto_captioning.captioning_thread as captioning_thread
 from auto_captioning.auto_captioning_model import AutoCaptioningModel
 from auto_captioning.models.wd_tagger import (KAOMOJIS,
                                               get_tags_to_exclude)
 from utils.enums import FrameAggregation
-from utils.video import DEFAULT_MAX_VIDEO_FRAMES
+from utils.video import DEFAULT_MAX_VIDEO_FRAMES, is_video_path
 
 
 def format_tag(tag: str) -> str:
@@ -55,46 +58,26 @@ class PixaiTaggerModel:
             category_thresholds[category] = category_threshold
         return category_thresholds
 
-    def generate_tags(self, image_array: np.ndarray,
-                      pixai_tagger_settings: dict) -> tuple[tuple, tuple]:
-        pixel_values = torch.from_numpy(image_array).unsqueeze(0).to(
-            self.device, dtype=next(self.model.parameters()).dtype)
-        with torch.inference_mode():
-            probabilities = self.model(pixel_values).sigmoid()[0]
-        tags_to_exclude = get_tags_to_exclude(
-            pixai_tagger_settings['tags_to_exclude'])
-        category_thresholds = self.get_category_thresholds(
-            pixai_tagger_settings)
-        tags_and_probabilities = []
-        index = 0
-        for category, count in self.model.config.tags_split:
-            if category in category_thresholds:
-                threshold = category_thresholds[category]
-                for offset in range(count):
-                    probability = float(probabilities[index + offset])
-                    tag = self.tags[index + offset]
-                    if (probability >= threshold
-                            and tag not in tags_to_exclude):
-                        tags_and_probabilities.append((tag, probability))
-            index += count
-        # Sort the tags by probability.
-        tags_and_probabilities.sort(key=lambda x: x[1], reverse=True)
-        tags_and_probabilities = tags_and_probabilities[
-            :pixai_tagger_settings['max_tags']]
-        if tags_and_probabilities:
-            tags, probabilities = zip(*tags_and_probabilities)
-        else:
-            tags, probabilities = (), ()
-        return tags, probabilities
+    def get_probabilities_from_tensors(
+            self, pixel_values: torch.Tensor) -> np.ndarray:
+        """Run inference on preprocessed frames and return the raw sigmoid
+        probabilities for all tags.
 
-    def get_probabilities(self, image_array: np.ndarray) -> np.ndarray:
-        """Run inference on a single preprocessed frame and return the raw
-        sigmoid probabilities for all tags."""
-        pixel_values = torch.from_numpy(image_array).unsqueeze(0).to(
-            self.device, dtype=next(self.model.parameters()).dtype)
-        with torch.inference_mode():
-            probabilities = self.model(pixel_values).sigmoid()[0]
-        return probabilities.cpu().numpy()
+        `pixel_values` is a (N, C, H, W) float tensor on the model device;
+        the return value has shape (N, tag count). The frames are split
+        into slices to bound GPU memory use."""
+        batch_parts = []
+        max_frames_per_pass = 64
+        model_dtype = next(self.model.parameters()).dtype
+        for start in range(0, pixel_values.shape[0], max_frames_per_pass):
+            frame_slice = pixel_values[start:start + max_frames_per_pass]
+            frame_slice = frame_slice.to(model_dtype)
+            with torch.inference_mode():
+                probabilities = self.model(frame_slice).sigmoid()
+            # Convert to float32 before the NumPy conversion because NumPy
+            # does not support bfloat16.
+            batch_parts.append(probabilities.float().cpu().numpy())
+        return np.concatenate(batch_parts, axis=0)
 
     def aggregate_probabilities(
             self, all_probabilities: list[np.ndarray],
@@ -167,6 +150,19 @@ class PixaiTagger(AutoCaptioningModel):
         self.multiframe_aggregation = FrameAggregation(
             self.pixai_tagger_settings.get(
                 'multiframe_aggregation', FrameAggregation.MEAN.value))
+        self.batch_size = self.pixai_tagger_settings.get('batch_size', 1)
+        if (self.pixai_tagger_settings.get('use_bfloat16', False)
+                and self.device.type == 'cuda'
+                and is_torch_bf16_gpu_available()):
+            self.dtype = torch.bfloat16
+        if self.device.type == 'cuda':
+            # TF32 speeds up convolutions and matrix multiplications on
+            # Ampere and newer GPUs with a negligible effect on accuracy.
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        # Image loading and preprocessing only uses the CPU and does not
+        # touch the model, so it can run in prefetch worker threads.
+        self.supports_prefetch = True
 
     def get_error_message(self) -> str | None:
         return None
@@ -189,38 +185,37 @@ class PixaiTagger(AutoCaptioningModel):
                     f'start time: {captioning_start_datetime_string})')
         return f'Generating tags... (device: {device_description})'
 
-    def preprocess_frame(self, pil_image: PilImage) -> np.ndarray:
-        """Convert a single PIL frame to the normalized CHW array expected
-        by the model."""
-        # Add a white background to the image in case it has transparent
-        # areas.
-        canvas = PilImage.new('RGBA', pil_image.size, (255, 255, 255))
-        canvas.alpha_composite(pil_image)
-        pil_image = canvas.convert('RGB')
+    def load_image_reduced(self, image: 'captioning_thread.Image'
+                           ) -> np.ndarray:
+        """Decode a still image for tagging.
+
+        JPEG images are decoded at a reduced scale (using the JPEG
+        decoder's built-in scaling), which is much faster than decoding the
+        full image and gives the tagger all the resolution it needs.
+        Images without transparency stay RGB so half as much data needs to
+        be copied and preprocessed."""
+        if is_video_path(image.path):
+            # Videos cannot be opened by Pillow; take a single frame instead.
+            return np.array(self.load_image(image))
         input_size = self.model.model.config.img_size
-        # Resize the image while preserving its aspect ratio, then pad it to
-        # a square.
-        width, height = pil_image.size
-        scale = input_size / max(width, height)
-        new_width = round(width * scale)
-        new_height = round(height * scale)
-        pil_image = pil_image.resize((new_width, new_height),
-                                     resample=PilImage.Resampling.BICUBIC)
-        canvas = PilImage.new('RGB', (input_size, input_size),
-                              (255, 255, 255))
-        horizontal_padding = (input_size - new_width) // 2
-        vertical_padding = (input_size - new_height) // 2
-        canvas.paste(pil_image, (horizontal_padding, vertical_padding))
-        # Normalize the image array to the range expected by the model.
-        image_array = np.array(canvas, dtype=np.float32) / 255.0
-        image_array = (image_array - 0.5) / 0.5
-        # HWC -> CHW.
-        image_array = np.transpose(image_array, (2, 0, 1))
-        image_array = np.ascontiguousarray(image_array)
-        return image_array
+        pil_image = PilImage.open(image.path)
+        # Ask the JPEG decoder for at least the model input size; it decodes
+        # at 1/2, 1/4, or 1/8 scale. Other formats are unaffected.
+        pil_image.draft('RGB', (input_size, input_size))
+        # Rotate the image according to the orientation tag.
+        pil_image = exif_transpose(pil_image)
+        if ('A' in pil_image.getbands()
+                or (pil_image.mode == 'P'
+                    and 'transparency' in pil_image.info)):
+            pil_image = pil_image.convert('RGBA')
+        else:
+            pil_image = pil_image.convert('RGB')
+        return np.array(pil_image)
 
     def get_model_inputs(self, image_prompt: str,
                          image: 'captioning_thread.Image') -> np.ndarray:
+        """Decode the image (or frames) and return the raw pixel arrays.
+        Preprocessing runs on the GPU afterwards."""
         if self.multiframe_enabled:
             frames = self.load_frames(
                 image, self.multiframe_frame_count,
@@ -229,31 +224,50 @@ class PixaiTagger(AutoCaptioningModel):
                 max_frames=self.multiframe_video_max_frames)
             if frames:
                 if len(frames) > 1:
-                    return np.stack(
-                        [self.preprocess_frame(frame) for frame in frames])
-                return self.preprocess_frame(frames[0])
-        pil_image = self.load_image(image)
-        return self.preprocess_frame(pil_image)
+                    return np.stack([np.array(frame) for frame in frames])
+                return np.array(frames[0])
+        return self.load_image_reduced(image)
 
-    def generate_caption(self, model_inputs: np.ndarray,
-                         image_prompt: str) -> tuple[str, str]:
-        if model_inputs.ndim == 4:
-            # Multi-frame: model_inputs has shape (N, C, H, W).
-            frame_count = model_inputs.shape[0]
-            all_probabilities = []
-            for frame_index in range(frame_count):
-                frame_array = model_inputs[frame_index]
-                probabilities = self.model.get_probabilities(frame_array)
-                all_probabilities.append(probabilities)
-                if self.thread.is_canceled:
-                    break
-            aggregated = self.model.aggregate_probabilities(
-                all_probabilities, self.multiframe_aggregation)
-            tags, probabilities = self.model.probabilities_to_tags(
-                aggregated, self.pixai_tagger_settings)
-        else:
-            tags, probabilities = self.model.generate_tags(
-                model_inputs, self.pixai_tagger_settings)
+    def preprocess_frames(self, frame_arrays: np.ndarray) -> torch.Tensor:
+        """Preprocess raw RGBA frames on the model device: composite
+        transparency over white, resize while preserving the aspect ratio,
+        pad to a square, and normalize.
+
+        `frame_arrays` has shape (N, H, W, 4) with uint8 values; the return
+        value is a (N, 3, S, S) float32 tensor on the model device."""
+        input_size = self.model.model.config.img_size
+        frames = []
+        for frame_array in frame_arrays:
+            frame = torch.from_numpy(frame_array).to(self.device)
+            frame = frame.permute(2, 0, 1).float().div(255)
+            rgb = frame[:3]
+            if frame.shape[0] == 4:
+                # Composite the image over a white background in case it has
+                # transparent areas.
+                alpha = frame[3]
+                rgb = rgb * alpha + (1 - alpha)
+            height, width = rgb.shape[-2:]
+            scale = input_size / max(height, width)
+            new_height = round(height * scale)
+            new_width = round(width * scale)
+            rgb = F.interpolate(rgb.unsqueeze(0), size=(new_height,
+                                                         new_width),
+                                 mode='bicubic',
+                                 antialias=True).squeeze(0)
+            # Pad to a square with white.
+            vertical_padding = (input_size - new_height) // 2
+            horizontal_padding = (input_size - new_width) // 2
+            rgb = F.pad(rgb, (horizontal_padding,
+                             input_size - new_width - horizontal_padding,
+                             vertical_padding,
+                             input_size - new_height - vertical_padding),
+                        value=1.0)
+            rgb = (rgb - 0.5) / 0.5
+            frames.append(rgb)
+        return torch.stack(frames)
+
+    def format_caption(self, tags: tuple, probabilities: tuple
+                        ) -> tuple[str, str]:
         caption = self.thread.tag_separator.join(tags)
         if self.show_probabilities:
             console_output_caption = self.thread.tag_separator.join(
@@ -263,3 +277,62 @@ class PixaiTagger(AutoCaptioningModel):
         else:
             console_output_caption = caption
         return caption, console_output_caption
+
+    def get_probabilities_for_inputs(self,
+                                     model_inputs: np.ndarray) -> np.ndarray:
+        """Preprocess raw RGBA frames on the device and run inference on
+        them. `model_inputs` has shape (H, W, 4) for a single frame or
+        (N, H, W, 4) for multiple frames; the return value has shape
+        (N, tag count)."""
+        if model_inputs.ndim == 3:
+            frame_arrays = model_inputs[np.newaxis]
+        else:
+            frame_arrays = model_inputs
+        pixel_values = self.preprocess_frames(frame_arrays)
+        return self.model.get_probabilities_from_tensors(pixel_values)
+
+    def generate_caption(self, model_inputs: np.ndarray,
+                         image_prompt: str) -> tuple[str, str]:
+        all_probabilities = self.get_probabilities_for_inputs(model_inputs)
+        if all_probabilities.shape[0] > 1:
+            probabilities = self.model.aggregate_probabilities(
+                list(all_probabilities), self.multiframe_aggregation)
+        else:
+            probabilities = all_probabilities[0]
+        tags, tag_probabilities = self.model.probabilities_to_tags(
+            probabilities, self.pixai_tagger_settings)
+        return self.format_caption(tags, tag_probabilities)
+
+    def generate_captions_batch(
+            self, model_inputs_list: list[np.ndarray]
+            ) -> list[tuple[str, str]]:
+        """Run inference on a batch of images. The frames of all images
+        (animated images and videos contribute multiple frames) are
+        preprocessed on the device and flattened into the same forward
+        pass, then aggregated per image afterwards."""
+        frame_counts = []
+        pixel_values_list = []
+        for model_inputs in model_inputs_list:
+            if model_inputs.ndim == 3:
+                frame_arrays = model_inputs[np.newaxis]
+            else:
+                frame_arrays = model_inputs
+            frame_counts.append(frame_arrays.shape[0])
+            pixel_values_list.append(self.preprocess_frames(frame_arrays))
+        all_frames = torch.cat(pixel_values_list, dim=0)
+        all_probabilities = self.model.get_probabilities_from_tensors(
+            all_frames)
+        captions = []
+        start = 0
+        for frame_count in frame_counts:
+            frame_probabilities = all_probabilities[start:start + frame_count]
+            start += frame_count
+            if frame_count > 1:
+                probabilities = self.model.aggregate_probabilities(
+                    list(frame_probabilities), self.multiframe_aggregation)
+            else:
+                probabilities = frame_probabilities[0]
+            tags, tag_probabilities = self.model.probabilities_to_tags(
+                probabilities, self.pixai_tagger_settings)
+            captions.append(self.format_caption(tags, tag_probabilities))
+        return captions
