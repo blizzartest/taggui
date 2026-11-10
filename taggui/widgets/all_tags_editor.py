@@ -33,6 +33,7 @@ class AllTagsList(QListView):
     image_list_filter_requested = Signal(str)
     image_list_filter_addition_requested = Signal(str)
     tag_addition_requested = Signal(str)
+    tag_statistics_requested = Signal(str)
     tags_deletion_requested = Signal(list)
 
     def __init__(self, proxy_tag_counter_model: ProxyTagCounterModel,
@@ -45,6 +46,8 @@ class AllTagsList(QListView):
         self.context_menu = QMenu(self)
         self.context_menu.addAction('Add to Search', self.add_tag_to_search)
         self.context_menu.addAction('Copy', self.copy_tag)
+        self.context_menu.addAction('View Tag Statistics',
+                                    self.show_tag_statistics)
         # `selectionChanged` must be used and not `currentChanged` because
         # `currentChanged` is not emitted when the same tag is deselected and
         # selected again.
@@ -88,6 +91,9 @@ class AllTagsList(QListView):
 
     def copy_tag(self):
         QGuiApplication.clipboard().setText(self.clicked_tag)
+
+    def show_tag_statistics(self):
+        self.tag_statistics_requested.emit(self.clicked_tag)
 
     def keyPressEvent(self, event: QKeyEvent):
         """

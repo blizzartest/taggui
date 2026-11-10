@@ -32,6 +32,7 @@ from widgets.auto_captioner import AutoCaptioner
 from widgets.image_list import ImageList
 from widgets.image_tags_editor import ImageTagsEditor
 from widgets.image_viewer import ImageViewer
+from widgets.tag_statistics_dialog import TagStatisticsDialog
 
 ICON_PATH = Path('images/icon.ico')
 GITHUB_REPOSITORY_URL = 'https://github.com/jhc13/taggui'
@@ -833,11 +834,22 @@ class MainWindow(QMainWindow):
             self.add_tag_to_selected_images)
         self.all_tags_editor.all_tags_list.tags_deletion_requested.connect(
             self.image_list_model.delete_tags)
+        self.all_tags_editor.all_tags_list.tag_statistics_requested.connect(
+            self.open_tag_statistics_dialog)
         self.all_tags_editor.all_tags_list.tags_deletion_requested.connect(
             self.image_list.filter_line_edit.clear)
         self.all_tags_editor.visibilityChanged.connect(
             lambda: self.toggle_all_tags_editor_action.setChecked(
                 self.all_tags_editor.isVisible()))
+
+    def open_tag_statistics_dialog(self, tag: str):
+        """Show the statistics of a tag over a fullscreen dialog."""
+        if not self.image_list_model.images:
+            return
+        dialog = TagStatisticsDialog(tag, self.image_list_model.images,
+                                     parent=self)
+        dialog.showMaximized()
+        dialog.exec()
 
     def connect_auto_captioner_signals(self):
         self.auto_captioner.caption_generated.connect(
