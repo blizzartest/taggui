@@ -865,9 +865,8 @@ class MainWindow(QMainWindow):
         based on either their creation or modification date."""
         filter_line_edit = self.image_list.filter_line_edit
         if filter_line_edit.syntax == 'Danbooru':
-            # The Danbooru search syntax has no date filters, so only the tag
-            # can be searched for.
-            filter_line_edit.setText(quote_tag_for_danbooru_search(tag))
+            quoted_tag = quote_tag_for_danbooru_search(tag)
+            filter_line_edit.setText(f'{quoted_tag} {date_type}:{month}')
         else:
             escaped_tag = (tag.replace('\\', '\\\\')
                            .replace('"', r'\"').replace("'", r"\'"))
