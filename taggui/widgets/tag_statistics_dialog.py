@@ -7,7 +7,7 @@ from PySide6.QtGui import (QColor, QPalette, QPainter, QPen)
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame,
                                QGroupBox, QHBoxLayout, QHeaderView,
                                QLabel, QScrollArea, QTableWidget,
-                               QVBoxLayout, QWidget)
+                               QTableWidgetItem, QVBoxLayout, QWidget)
 
 CHART_MARGIN_LEFT = 60
 CHART_MARGIN_RIGHT = 30
