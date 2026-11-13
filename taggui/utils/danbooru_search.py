@@ -1,5 +1,7 @@
 import re
 
+MONTH_PATTERN = re.compile(r'\d{4}-\d{2}\Z')
+
 
 class DanbooruSearchError(ValueError):
     pass
@@ -134,6 +136,12 @@ class _Parser:
         lowercase_word = word.lower()
         if lowercase_word.startswith('type:') and len(word) > 5:
             filter_ = ['type', word[5:]]
+        elif (lowercase_word.startswith('created:')
+                and MONTH_PATTERN.match(word[8:])):
+            filter_ = ['created', word[8:]]
+        elif (lowercase_word.startswith('modified:')
+                and MONTH_PATTERN.match(word[9:])):
+            filter_ = ['modified', word[9:]]
         else:
             filter_ = ['tag', word]
         return _apply_prefix(token[1], filter_)

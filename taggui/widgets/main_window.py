@@ -33,6 +33,7 @@ from widgets.auto_captioner import AutoCaptioner
 from widgets.image_list import ImageList
 from widgets.image_tags_editor import ImageTagsEditor
 from widgets.image_viewer import ImageViewer
+from widgets.tag_statistics_dialog import TagStatisticsDialog
 
 ICON_PATH = Path('images/icon.ico')
 GITHUB_REPOSITORY_URL = 'https://github.com/jhc13/taggui'
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
             defaultValue=DEFAULT_SETTINGS['load_mode'], type=str)
         tokenizer = AutoTokenizer.from_pretrained(
             get_resource_path(TOKENIZER_DIRECTORY_PATH))
+        self.tokenizer = tokenizer
         self.proxy_image_list_model = ProxyImageListModel(
             self.image_list_model, tokenizer, tag_separator)
         self.image_list_model.proxy_image_list_model = (
@@ -839,11 +841,49 @@ class MainWindow(QMainWindow):
             self.add_tag_to_selected_images)
         self.all_tags_editor.all_tags_list.tags_deletion_requested.connect(
             self.image_list_model.delete_tags)
+        self.all_tags_editor.all_tags_list.tag_statistics_requested.connect(
+            self.open_tag_statistics_dialog)
         self.all_tags_editor.all_tags_list.tags_deletion_requested.connect(
             self.image_list.filter_line_edit.clear)
         self.all_tags_editor.visibilityChanged.connect(
             lambda: self.toggle_all_tags_editor_action.setChecked(
                 self.all_tags_editor.isVisible()))
+
+    def open_tag_statistics_dialog(self, tag: str):
+        """Show the statistics of a tag over a fullscreen dialog."""
+        if not self.image_list_model.images:
+            return
+        dialog = TagStatisticsDialog(tag, self.image_list_model.images,
+                                     parent=self, tokenizer=self.tokenizer,
+                                     directory_path=self.directory_path,
+                                     count_folders_from_disk=(
+                                         self.image_list_model.load_mode
+                                         == 'tags_only'))
+        dialog.image_list_month_filter_requested.connect(
+            self.filter_images_for_tag_month)
+        dialog.image_list_filter_addition_requested.connect(
+            self.add_tag_to_image_list_filter_text)
+        if dialog.restore_geometry():
+            dialog.exec()
+        else:
+            dialog.showMaximized()
+            dialog.exec()
+
+    @Slot(str, str, str)
+    def filter_images_for_tag_month(self, tag: str, month: str,
+                                    date_type: str):
+        """Filter the image list for images with a tag from a given month,
+        based on either their creation or modification date."""
+        filter_line_edit = self.image_list.filter_line_edit
+        if filter_line_edit.syntax == 'Danbooru':
+            quoted_tag = quote_tag_for_danbooru_search(tag)
+            filter_line_edit.setText(f'{quoted_tag} {date_type}:{month}')
+        else:
+            escaped_tag = (tag.replace('\\', '\\\\')
+                           .replace('"', r'\"').replace("'", r"\'"))
+            filter_line_edit.setText(
+                f'tag:"{escaped_tag}" AND {date_type}:{month}')
+        self.set_image_list_filter()
 
     def connect_auto_captioner_signals(self):
         self.auto_captioner.caption_generated.connect(

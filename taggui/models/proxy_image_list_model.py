@@ -1,6 +1,7 @@
 import operator
 import random
 import re
+from datetime import datetime
 from fnmatch import translate
 from functools import lru_cache
 
@@ -184,6 +185,17 @@ class ProxyImageListModel(QSortFilterProxyModel):
         self.caption_cache.clear()
         self.token_count_cache.clear()
 
+    def get_image_month(self, image: Image, use_creation: bool) -> str:
+        """Get the `YYYY-MM` month an image was created or last modified in.
+        An empty string is returned if the timestamp is unavailable."""
+        if use_creation:
+            timestamp = self.get_creation_time(image)
+        else:
+            timestamp = self.get_modification_time(image)
+        if timestamp <= 0:
+            return ''
+        return datetime.fromtimestamp(timestamp).strftime('%Y-%m')
+
     def does_image_match_filter(self, image: Image,
                                 filter_: list | str) -> bool:
         if isinstance(filter_, str):
@@ -213,6 +225,10 @@ class ProxyImageListModel(QSortFilterProxyModel):
                 type_matcher = get_filter_matcher(
                     filter_[1].lower().lstrip('.'))
                 return type_matcher(image.path.suffix.lower().lstrip('.'))
+            if filter_[0] == 'created':
+                return self.get_image_month(image, True) == filter_[1]
+            if filter_[0] == 'modified':
+                return self.get_image_month(image, False) == filter_[1]
         if filter_[1] == 'AND':
             return (self.does_image_match_filter(image, filter_[0])
                     and self.does_image_match_filter(image, filter_[2:]))
