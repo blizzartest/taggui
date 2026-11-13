@@ -15,7 +15,10 @@ models.
 - Integrated token counter (for Stable Diffusion)
 - Automatic caption and tag generation
 - Batch tag operations for renaming, deleting, and sorting tags
-- Advanced image list filtering
+- Advanced image list filtering, including by tag and by creation or
+  modification month
+- Per-tag statistics with usage over time, associated tags, and usage by
+  folder
 - Sorting the image list by name, creation date, modification date, tag
   count, dimensions, aspect ratio, or randomly
 ## Installation
